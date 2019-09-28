@@ -3,6 +3,7 @@
 //
 
 #pragma once
+
 #include <vector>
 #include <mutex>
 #include <atomic>
@@ -10,6 +11,9 @@
 
 #ifdef BOOST_ARC
 #include <boost/smart_ptr/atomic_shared_ptr.hpp>
+#endif
+#ifdef MRSW_PTR
+#include "mrsw_ptr/mrsw_ptr.h"
 #endif
 
 // hash map related
@@ -19,11 +23,15 @@ public:
     std::vector<V> values_;
     std::vector<std::unique_ptr<V>> ptrs_;
     std::vector<std::mutex> locks_;
-    std::vector<std::atomic<const T*>> atomic_ptrs_;
+    std::vector<std::atomic<const T *>> atomic_ptrs_;
 #ifdef BOOST_ARC
     using Arc = boost::atomic_shared_ptr<T>;
     using Rc = boost::shared_ptr<T>;
     std::vector<Arc> arcs;
+#endif
+#ifdef MRSW_PTR
+    using Mrsw = MrswPtr<T>;
+    std::vector<Mrsw> mps;
 #endif
 
     explicit HashMap(size_t size);

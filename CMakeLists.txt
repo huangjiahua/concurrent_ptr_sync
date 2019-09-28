@@ -28,3 +28,7 @@ add_executable(boost_arc boost_arc_impl.cpp general_bench.cpp)
 target_link_libraries(boost_arc ${UTIL_LIB})
 target_compile_definitions(boost_arc PUBLIC BOOST_ARC)
 target_include_directories(boost_arc PUBLIC ${Boost_INCLUDE_DIR})
+
+add_executable(mrsw_ptr mrsw_ptr_impl.cpp general_bench.cpp)
+target_link_libraries(mrsw_ptr ${UTIL_LIB})
+target_compile_definitions(mrsw_ptr PUBLIC MRSW_PTR)
