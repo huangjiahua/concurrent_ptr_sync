@@ -73,18 +73,26 @@ int main(int argc, const char *argv[]) {
 
     for (auto &t : threads) t.join();
 
-    cout << "Thread Count:    " << config.thread_count << endl;
-    cout << "Total Operation: " << config.operations << endl;
-    cout << "Hash Range:      " << config.hash_size << endl;
+    if (!config.only_tp) {
+        cout << "Thread Count:    " << config.thread_count << endl;
+        cout << "Total Operation: " << config.operations << endl;
+        cout << "Hash Range:      " << config.hash_size << endl;
 
-    for (size_t i = 0; i < config.thread_count; i++) {
-        cout << "Thread " << i << ":        " << epochs[i] << endl;
+
+        for (size_t i = 0; i < config.thread_count; i++) {
+            cout << "Thread " << i << ":        " << epochs[i] << endl;
+        }
     }
 
     size_t average = std::accumulate(epochs.begin(), epochs.end(), 0ull) / epochs.size();
-    cout << "Average Time:    " << average << endl;
-    cout << "Throughput:      " << (double) config.operations / (double) average << "mop/s" << endl;
 
-    bool check = hash_map.Check();
-    cout << "Check Result:    " << std::boolalpha << check << endl;
+    if (!config.only_tp) {
+        cout << "Average Time:    " << average << endl;
+        cout << "Throughput:      " << (double) config.operations / (double) average << "mop/s" << endl;
+
+        bool check = hash_map.Check();
+        cout << "Check Result:    " << std::boolalpha << check << endl;
+    } else {
+        cout << (double) config.operations / (double) average << std::flush;
+    }
 }

@@ -34,6 +34,7 @@ struct Config {
     size_t operations = kDefaultOperations;
     size_t hash_size = kHashSize;
     double read_ratio = kDefaultReadRatio;
+    bool only_tp = false;
 
     size_t OperationsPerThread() {
         return operations / thread_count;
@@ -73,11 +74,18 @@ struct Config {
                 if (!(read_ratio >= 0.0 && read_ratio <= 1.0)) {
                     Panic("param error");
                 }
+            } else if (arg == "--onlytp") {
+                if (i + 1 > argc) {
+                    Panic("param error");
+                }
+                i++;
+                only_tp = true;
             } else {
                 Panic("param error");
             }
         }
     }
+
 };
 
 // random related
