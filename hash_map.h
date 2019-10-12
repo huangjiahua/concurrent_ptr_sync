@@ -15,6 +15,28 @@
 #ifdef MRSW_PTR
 #include "mrsw_ptr/mrsw_ptr.h"
 #endif
+#ifdef HAZ_PTR
+
+#include "haz_ptr/haz_ptr.h"
+
+#endif
+
+#ifdef HAZ_PTR
+
+struct Wrapper : public hazptr_obj_base<Wrapper> {
+    uint64_t data;
+
+    Wrapper(uint64_t i) : data(i) {}
+
+    uint64_t &Get() { return data; }
+
+    uint64_t &Set(const uint64_t &i) {
+        data = i;
+        return data;
+    }
+};
+
+#endif
 
 // hash map related
 template<typename T, typename V = T>
@@ -32,6 +54,9 @@ public:
 #ifdef MRSW_PTR
     using Mrsw = MrswPtr<T>;
     std::vector<Mrsw> mps;
+#endif
+#ifdef HAZ_PTR
+    std::vector<std::atomic<Wrapper*>> haz_ptrs_;
 #endif
 
     explicit HashMap(size_t size);

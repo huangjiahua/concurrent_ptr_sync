@@ -10,7 +10,7 @@ function os.capture(cmd, raw)
 end
 
 local info = {
-    cmd = "cmake-build-release/mrsw_ptr --operations 20000000 --read 1.0 --onlytp true --hashsize %d --thread %d",
+    cmd = "cmake-build-release/"..arg[1].." --operations 20000000 --read 0.8 --onlytp true --hashsize %d --thread %d",
     tableSizes = {1, 10, 100, 1000, 10000, 100000, 1000000},
     threads = {1, 2, 4, 8},
 }
