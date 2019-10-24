@@ -535,6 +535,7 @@ public:
                                                                 std::memory_order_acq_rel);
                 if (!result) {
                     holder.reset(nullptr);
+                    std::this_thread::yield();
                     continue;
                 }
                 ptr.release();
@@ -549,6 +550,7 @@ public:
                         if (KeyEqual()(d_node->kv_pair_.first, k)) {
                             bool result = node_ptr->compare_exchange_strong(node, ptr.get(), std::memory_order_acq_rel);
                             if (!result) {
+                                std::this_thread::yield();
                                 holder.reset(nullptr);
                                 continue;
                             }
@@ -570,6 +572,7 @@ public:
                                     node_ptr = &tmp_arr_ptr->array_[curr_idx];
                                     tmp_arr_ptr.release();
                                 }
+                                std::this_thread::yield();
                                 continue;
                             } else {
                                 std::unique_ptr<BucketMapT> tmp_bkt_map(new BucketMapT(4, 1.0, 100000));
@@ -584,6 +587,7 @@ public:
                                     tmp_bkt_map.release();
                                     d_node->retire();
                                 }
+                                std::this_thread::yield();
                                 continue;
                             }
                         }
