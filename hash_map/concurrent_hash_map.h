@@ -173,7 +173,7 @@ class BucketMap : public ::TreeNode {
 private:
     using Allocator = std::allocator<uint8_t>;
     using Mutex = std::mutex;
-    using Buckets = Buckets<KeyType, ValueType>;
+    using BucketsT = Buckets<KeyType, ValueType>;
     using InnerNode = Node<KeyType, ValueType>;
     template<typename T> using Atom = std::atomic<T>;
 
@@ -188,7 +188,7 @@ public:
 
         ~Iterator() = default;
 
-        void Set(InnerNode *node, Buckets *buckets, size_t bucket_count, uint64_t idx) {
+        void Set(InnerNode *node, BucketsT *buckets, size_t bucket_count, uint64_t idx) {
             node_ = node;
             buckets_ = buckets;
             bucket_count_ = bucket_count;
@@ -261,7 +261,7 @@ public:
 
         hazptr_array<3> hazptrs_;
         InnerNode *node_{nullptr};
-        Buckets *buckets_{nullptr};
+        BucketsT *buckets_{nullptr};
         size_t bucket_count_{0};
         uint64_t idx_{0};
     };
@@ -274,7 +274,7 @@ public:
             std::function<size_t(const KeyType &)> hasher = HashFn())
             : load_factor_(load_factor), max_size_(max_size), hasher_(hasher) {
         initial_buckets = util::nextPowerOf2(initial_buckets);
-        auto buckets = Buckets::Create(initial_buckets);
+        auto buckets = BucketsT::Create(initial_buckets);
         buckets_.store(buckets);
         bucket_count_.store(initial_buckets);
         load_factor_nodes_ = load_factor_ * initial_buckets;
@@ -285,7 +285,7 @@ public:
         hazptr_holder<> &haz_next = res.hazptrs_[2];
         size_t h = hasher_(k);
         size_t bucket_count;
-        Buckets *buckets;
+        BucketsT *buckets;
         GetBucketsPtrAndCount(buckets, bucket_count, res.hazptrs_[0]);
 
         auto idx = GetIdx(bucket_count, h);
@@ -311,7 +311,7 @@ public:
     }
 
 private:
-    void GetBucketsPtrAndCount(Buckets *&buckets, size_t &count, hazptr_holder<> &holder) {
+    void GetBucketsPtrAndCount(BucketsT *&buckets, size_t &count, hazptr_holder<> &holder) {
         while (true) {
             auto seq_lock = seq_lock_.load(std::memory_order_acquire);
             count = bucket_count_.load(std::memory_order_acquire);
@@ -405,8 +405,8 @@ private:
     }
 
     void Rehash(size_t bucket_count) {
-        Buckets *buckets = buckets_.load(std::memory_order_relaxed);
-        Buckets *new_buckets = Buckets::Create(bucket_count);
+        BucketsT *buckets = buckets_.load(std::memory_order_relaxed);
+        BucketsT *new_buckets = BucketsT::Create(bucket_count);
 
         load_factor_nodes_ = bucket_count * load_factor_;
 
@@ -447,12 +447,12 @@ private:
             }
         }
 
-        Buckets *old_buckets = buckets_.load(std::memory_order_relaxed);
+        BucketsT *old_buckets = buckets_.load(std::memory_order_relaxed);
         seq_lock_.fetch_add(1, std::memory_order_release);
         bucket_count_.store(bucket_count, std::memory_order_release);
         buckets_.store(new_buckets, std::memory_order_release);
         seq_lock_.fetch_add(1, std::memory_order_release);
-        old_buckets->retire([old_count](Buckets *b) {
+        old_buckets->retire([old_count](BucketsT *b) {
             b->Destory(old_count);
         });
     }
@@ -465,7 +465,7 @@ private:
     const size_t max_size_;
     std::function<size_t(const KeyType &)> hasher_;
 
-    alignas(64) Atom<Buckets *> buckets_{nullptr};
+    alignas(64) Atom<BucketsT *> buckets_{nullptr};
     Atom<uint64_t> seq_lock_{0};
     Atom<size_t> bucket_count_;
 };
