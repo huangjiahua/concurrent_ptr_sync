@@ -67,6 +67,8 @@ struct HMBConfig {
 using namespace std;
 using Map = ConcurrentHashMap<uint64_t, uint64_t, std::hash<uint64_t>, std::equal_to<>>;
 
+constexpr static size_t kROUND = 10;
+
 int main(int argc, const char *argv[]) {
     HMBConfig config;
     config.LoadConfig(argc, argv);
@@ -89,11 +91,13 @@ int main(int argc, const char *argv[]) {
     auto worker = [per_thread_task](size_t idx, Map &map, uint64_t *keys, int *coins, size_t &time) {
         auto t = SystemTime::Now();
         uint64_t value = 0;
-        for (size_t j = 0; j < per_thread_task; j++) {
-            if (coins[j]) {
-                map.Find(keys[j], value);
-            } else {
-                map.Insert(keys[j], keys[j] + idx);
+        for (size_t i = 0; i < kROUND; i++) {
+            for (size_t j = 0; j < per_thread_task; j++) {
+                if (coins[j]) {
+                    map.Find(keys[j], value);
+                } else {
+                    map.Insert(keys[j], keys[j] + idx);
+                }
             }
         }
         time = SystemTime::Now().DurationSince<std::chrono::microseconds>(t);
@@ -107,7 +111,7 @@ int main(int argc, const char *argv[]) {
     for (auto &t : threads) t.join();
 
     size_t average_time = std::accumulate(times.begin(), times.end(), 0ull) / times.size();
-    double tp = (double) config.operations / (double) average_time;
+    double tp = (double) config.operations * (double) kROUND / (double) average_time;
 
     cout << tp << endl;
 
