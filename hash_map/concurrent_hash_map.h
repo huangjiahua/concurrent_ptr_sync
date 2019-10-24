@@ -138,8 +138,8 @@ class alignas(128) Buckets : public hazptr_obj_base<Buckets<KeyType, ValueType>,
         Buckets<KeyType, ValueType> *)>> {
     using Allocator = std::allocator<uint8_t>;
     template<typename T> using Atom = std::atomic<T>;
-    using Node = Node<KeyType, ValueType>;
-    using BucketRoot = Atom<Node *>;
+    using InnerNode = Node<KeyType, ValueType>;
+    using BucketRoot = Atom<InnerNode *>;
 public:
     static Buckets *Create(size_t count) {
         auto buf = Allocator().allocate(sizeof(Buckets) + sizeof(BucketRoot) * count);
@@ -174,7 +174,7 @@ private:
     using Allocator = std::allocator<uint8_t>;
     using Mutex = std::mutex;
     using Buckets = Buckets<KeyType, ValueType>;
-    using Node = Node<KeyType, ValueType>;
+    using InnerNode = Node<KeyType, ValueType>;
     template<typename T> using Atom = std::atomic<T>;
 
 public:
@@ -188,7 +188,7 @@ public:
 
         ~Iterator() = default;
 
-        void Set(Node *node, Buckets *buckets, size_t bucket_count, uint64_t idx) {
+        void Set(InnerNode *node, Buckets *buckets, size_t bucket_count, uint64_t idx) {
             node_ = node;
             buckets_ = buckets;
             bucket_count_ = bucket_count;
@@ -260,7 +260,7 @@ public:
                   idx_(std::exchange(o.idx_, 0)) {}
 
         hazptr_array<3> hazptrs_;
-        Node *node_{nullptr};
+        InnerNode *node_{nullptr};
         Buckets *buckets_{nullptr};
         size_t bucket_count_{0};
         uint64_t idx_{0};
@@ -289,8 +289,8 @@ public:
         GetBucketsPtrAndCount(buckets, bucket_count, res.hazptrs_[0]);
 
         auto idx = GetIdx(bucket_count, h);
-        const Atom<Node *> *prev = &buckets->root_[idx];
-        Node *node = haz_curr.get_protected(*prev);
+        const Atom<InnerNode *> *prev = &buckets->root_[idx];
+        InnerNode *node = haz_curr.get_protected(*prev);
         while (node) {
             if (KeyEqual()(k, node->GetValue().first)) {
                 res.Set(node, buckets, bucket_count, idx);
@@ -327,7 +327,7 @@ private:
         return (hash & (bucket_count - 1));
     }
 
-    bool DoInsert(Iterator &it, const KeyType &k, const ValueType &v, InsertType type, Node *cur) {
+    bool DoInsert(Iterator &it, const KeyType &k, const ValueType &v, InsertType type, InnerNode *cur) {
         size_t h = hasher_(k);
         std::unique_lock<Mutex> g(mut_);
 
@@ -341,10 +341,10 @@ private:
 
         size_t idx = GetIdx(bucket_count, h);
         assert(idx < bucket_count);
-        Atom<Node *> *head = &buckets->root_[idx];
-        Node *node = head->load(std::memory_order_relaxed);
-        Node *head_node = node;
-        Atom<Node *> *prev = head;
+        Atom<InnerNode *> *head = &buckets->root_[idx];
+        InnerNode *node = head->load(std::memory_order_relaxed);
+        InnerNode *head_node = node;
+        Atom<InnerNode *> *prev = head;
         auto &haz_buckets = it.hazptrs_[0];
         auto &haz_node = it.hazptrs_[1];
         haz_buckets.reset(buckets);
@@ -358,16 +358,16 @@ private:
                 }
 
                 if (!cur) {
-                    cur = (Node *) Allocator().allocate(sizeof(Node));
-                    new(cur) Node(k, v);
+                    cur = (InnerNode *) Allocator().allocate(sizeof(InnerNode));
+                    new(cur) InnerNode(k, v);
                 }
 
-                Node *next = node->next_.load(std::memory_order_relaxed);
+                InnerNode *next = node->next_.load(std::memory_order_relaxed);
                 cur->next_.store(next, std::memory_order_relaxed);
                 prev->store(cur, std::memory_order_release);
                 g.unlock();
-                node->retire([](Node *n) {
-                    Allocator().deallocate((uint8_t*)n, sizeof(Node));
+                node->retire([](InnerNode *n) {
+                    Allocator().deallocate((uint8_t*)n, sizeof(InnerNode));
                 });
                 return true;
             }
@@ -394,8 +394,8 @@ private:
         size_++;
         if (!cur) {
             assert(type == InsertType::DOES_NOT_EXIST || type == InsertType::ANY);
-            cur = (Node *) Allocator().allocate(sizeof(Node));
-            new(cur) Node(k, v);
+            cur = (InnerNode *) Allocator().allocate(sizeof(InnerNode));
+            new(cur) InnerNode(k, v);
         }
         cur->next_.store(head_node, std::memory_order_relaxed);
         assert(head);
@@ -412,18 +412,18 @@ private:
 
         size_t old_count = bucket_count_.load(std::memory_order_relaxed);
         for (size_t i = 0; i < old_count; i++) {
-            Atom<Node *> *bucket = &buckets->root_[i];
-            Node *node = bucket->load(std::memory_order_relaxed);
+            Atom<InnerNode *> *bucket = &buckets->root_[i];
+            InnerNode *node = bucket->load(std::memory_order_relaxed);
             if (!node) {
                 continue;
             }
             size_t h = hasher_(node->GetValue().first);
             size_t idx = GetIdx(bucket_count, h);
 
-            Node *last_run = node;
+            InnerNode *last_run = node;
             size_t last_idx = idx;
             size_t count = 0;
-            Node *last = node->next_.load(std::memory_order_relaxed);
+            InnerNode *last = node->next_.load(std::memory_order_relaxed);
             for (; last != nullptr;
                    last = last->next_.load(std::memory_order_relaxed)) {
                 size_t k = GetIdx(bucket_count, HashFn()(last->GetValue().first));
@@ -438,10 +438,10 @@ private:
 
             for (; node != last_run;
                    node = node->next_.load(std::memory_order_relaxed)) {
-                Node *new_node = (Node *) Allocator().allocate(sizeof(Node));
-                new(new_node) Node(*node);
+                InnerNode *new_node = (InnerNode *) Allocator().allocate(sizeof(InnerNode));
+                new(new_node) InnerNode(*node);
                 size_t k = GetIdx(bucket_count, HashFn()(node->GetValue().first));
-                Atom<Node *> *prev_head = &new_buckets->root_[k];
+                Atom<InnerNode *> *prev_head = &new_buckets->root_[k];
                 new_node->next_.store(prev_head->load(std::memory_order_relaxed));
                 prev_head->store(new_node, std::memory_order_relaxed);
             }
@@ -477,15 +477,15 @@ template<typename KeyType, typename ValueType, typename HashFn, typename KeyEqua
 class ConcurrentHashMap {
     using Allocator = std::allocator<uint8_t>;
     using Mutex = std::mutex;
-    using BucketMap = bucket::BucketMap<KeyType, ValueType, HashFn, KeyEqual>;
+    using BucketMapT = bucket::BucketMap<KeyType, ValueType, HashFn, KeyEqual>;
     template<typename T> using Atom = std::atomic<T>;
-    using DataNode = DataNode<KeyType, ValueType>;
+    using DataNodeT = DataNode<KeyType, ValueType>;
 
     static constexpr size_t kArrayNodeSize = 16;
     static constexpr size_t kArrayNodeSizeBits = 4;
     static constexpr size_t kHashWordLength = 64;
     static constexpr size_t kMaxDepth = 10;
-    using ArrayNode = ArrayNode<kArrayNodeSize>;
+    using ArrayNodeT = ArrayNode<kArrayNodeSize>;
 public:
     ConcurrentHashMap(size_t root_size, size_t max_depth) {
         root_size_ = util::nextPowerOf2(root_size);
@@ -513,11 +513,11 @@ public:
         size_t idx = GetRootIdx(h);
         Atom<TreeNode *> *node_ptr = &root_[idx];
         TreeNode *node = nullptr;
-        DataNode *new_node = (DataNode *) Allocator().allocate(sizeof(DataNode));
-        new(new_node) DataNode(k, v);
-        std::unique_ptr<DataNode, std::function<void(DataNode *)>> ptr(new_node, [](DataNode *n) {
+        DataNodeT *new_node = (DataNodeT *) Allocator().allocate(sizeof(DataNodeT));
+        new(new_node) DataNodeT(k, v);
+        std::unique_ptr<DataNodeT, std::function<void(DataNodeT *)>> ptr(new_node, [](DataNodeT *n) {
             n->~DataNode();
-            Allocator().deallocate((uint8_t *) n, sizeof(DataNode));
+            Allocator().deallocate((uint8_t *) n, sizeof(DataNodeT));
         });
         while (true) {
             curr_holder_idx = (curr_holder_idx + 1ull) & 1ull;
@@ -545,7 +545,7 @@ public:
                         if (type == InsertType::DOES_NOT_EXIST) {
                             return false;
                         }
-                        DataNode *d_node = static_cast<DataNode *>(node);
+                        DataNodeT *d_node = static_cast<DataNodeT *>(node);
                         if (KeyEqual()(d_node->kv_pair_.first, k)) {
                             bool result = node_ptr->compare_exchange_strong(node, ptr.get(), std::memory_order_acq_rel);
                             if (!result) {
@@ -557,7 +557,7 @@ public:
                             return true;
                         } else {
                             if (n < max_depth_ - 1) {
-                                std::unique_ptr<ArrayNode> tmp_arr_ptr(new ArrayNode);
+                                std::unique_ptr<ArrayNodeT> tmp_arr_ptr(new ArrayNodeT);
                                 size_t tmp_hash = HashFn()(d_node->kv_pair_.first);
                                 size_t tmp_idx = GetNthIdx(tmp_hash, n + 1);
                                 tmp_arr_ptr->array_[tmp_idx].store(node, std::memory_order_relaxed);
@@ -572,8 +572,8 @@ public:
                                 }
                                 continue;
                             } else {
-                                std::unique_ptr<BucketMap> tmp_bkt_map(new BucketMap(4, 1.0, 100000));
-                                typename BucketMap::Iterator iter;
+                                std::unique_ptr<BucketMapT> tmp_bkt_map(new BucketMapT(4, 1.0, 100000));
+                                typename BucketMapT::Iterator iter;
                                 tmp_bkt_map->Insert(iter, d_node->kv_pair_.first, d_node->kv_pair_.second,
                                                     InsertType::DOES_NOT_EXIST);
                                 bool result = node_ptr->compare_exchange_strong(node, (TreeNode *) tmp_bkt_map.get(),
@@ -591,14 +591,14 @@ public:
                     case TreeNodeType::ARRAY_NODE: {
                         n++;
                         holder.reset(nullptr);
-                        ArrayNode *arr_node = static_cast<ArrayNode *>(node);
+                        ArrayNodeT *arr_node = static_cast<ArrayNodeT *>(node);
                         size_t curr_idx = GetNthIdx(h, n);
                         node_ptr = &arr_node->array_[curr_idx];
                         continue;
                     }
                     case TreeNodeType::BUCKETS_NODE: {
-                        BucketMap *bkt = static_cast<BucketMap *>(node);
-                        typename BucketMap::Iterator iter;
+                        BucketMapT *bkt = static_cast<BucketMapT *>(node);
+                        typename BucketMapT::Iterator iter;
                         bool result = bkt->Insert(iter, k, v, type);
                         ptr.release();
                         return result;
@@ -632,7 +632,7 @@ public:
 
             switch (node->Type()) {
                 case TreeNodeType::DATA_NODE: {
-                    DataNode *d_node = static_cast<DataNode *>(node);
+                    DataNodeT *d_node = static_cast<DataNodeT *>(node);
                     if (KeyEqual()(d_node->kv_pair_.first, k)) {
                         v = d_node->kv_pair_.second;
                         return true;
@@ -641,7 +641,7 @@ public:
                     }
                 }
                 case TreeNodeType::ARRAY_NODE: {
-                    ArrayNode *arr_node = static_cast<ArrayNode *>(node);
+                    ArrayNodeT *arr_node = static_cast<ArrayNodeT *>(node);
                     n++;
                     idx = GetNthIdx(h, n);
                     node_ptr = &arr_node->array_[idx];
@@ -650,8 +650,8 @@ public:
                     continue;
                 }
                 case TreeNodeType::BUCKETS_NODE: {
-                    BucketMap *bucket_map = static_cast<BucketMap *>(node);
-                    typename BucketMap::Iterator iter;
+                    BucketMapT *bucket_map = static_cast<BucketMapT *>(node);
+                    typename BucketMapT::Iterator iter;
                     if (bucket_map->Find(iter, k)) {
                         v = iter->second;
                         return true;
