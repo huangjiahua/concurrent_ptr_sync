@@ -85,6 +85,7 @@ int main(int argc, const char *argv[]) {
 
     for (size_t i = 0; i < config.operations; i++) {
         map.Insert(rng.GenZipf<uint64_t>(1000000000ull, 1.5), 0);
+        ft.Insert(rng.GenZipf<uint64_t>(1000000000ull, 1.5), 0);
     }
 
     vector<uint64_t> keys(config.operations + 1000);
@@ -96,7 +97,6 @@ int main(int argc, const char *argv[]) {
     }
     vector<int> coins(config.operations + 1000);
     for (auto &coin: coins) coin = rng.FlipCoin(config.read_ratio);
-    cout << config.read_ratio << endl;
     vector<thread> threads(config.thread_count);
     vector<size_t> times(config.thread_count, 0);
 
@@ -136,7 +136,6 @@ int main(int argc, const char *argv[]) {
     size_t average_time = std::accumulate(times.begin(), times.end(), 0ull) / times.size();
     double tp = (double) config.operations * (double) kROUND / (double) average_time;
 
-    cout << "core: " << core << endl;
     cout << tp << endl;
 
     return 0;
