@@ -76,18 +76,24 @@ int main(int argc, const char *argv[]) {
     config.LoadConfig(argc, argv);
     RandomGenerator rng;
     size_t per_thread_task = config.operations / config.thread_count;
+    size_t core = 0;
 
     ConcurrentHashMap<uint64_t, uint64_t, std::hash<uint64_t>, std::equal_to<>>
             map(config.initial_size, config.max_depth);
     ConcurrentHashMap<uint64_t, uint64_t, std::hash<uint64_t>, std::equal_to<>>
-            ft(kFtRootSize, 20);
+            ft(kFtRootSize, config.max_depth);
 
     for (size_t i = 0; i < config.operations; i++) {
         map.Insert(rng.GenZipf<uint64_t>(1000000000ull, 1.5), 0);
     }
 
     vector<uint64_t> keys(config.operations + 1000);
-    for (auto &key : keys) key = rng.GenZipf<uint64_t>(1000000000ull, 1.5);
+    for (auto &key : keys) {
+        key = rng.GenZipf<uint64_t>(1000000000ull, 1.5);
+        if (key < 60000) {
+            core++;
+        }
+    }
     vector<int> coins(config.operations + 1000);
     for (auto &coin: coins) coin = rng.FlipCoin(config.read_ratio);
     vector<thread> threads(config.thread_count);
@@ -122,6 +128,7 @@ int main(int argc, const char *argv[]) {
     size_t average_time = std::accumulate(times.begin(), times.end(), 0ull) / times.size();
     double tp = (double) config.operations * (double) kROUND / (double) average_time;
 
+    cout << "core: " << core << endl;
     cout << tp << endl;
 
     return 0;
