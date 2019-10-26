@@ -15,6 +15,7 @@
 #include <cstddef>
 
 #include "hash_map.h"
+#include "zipf.h"
 
 // panic function
 void Panic(const char *str) {
@@ -97,6 +98,12 @@ struct RandomGenerator {
     template<typename T = size_t>
     T Gen(T begin, T end) {
         std::uniform_int_distribution<T> dis(begin, end - 1);
+        return dis(this->en_);
+    }
+
+    template<typename T = size_t>
+    T GenZipf(T range, double factor) {
+        zipf_distribution<T> dis(range, factor);
         return dis(this->en_);
     }
 

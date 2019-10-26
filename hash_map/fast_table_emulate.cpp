@@ -77,49 +77,34 @@ int main(int argc, const char *argv[]) {
     RandomGenerator rng;
     size_t per_thread_task = config.operations / config.thread_count;
 
-    ConcurrentHashMap<uint64_t, uint64_t, std::hash<uint64_t>, std::equal_to<>> map(config.initial_size,
-                                                                                    config.max_depth);
-    ConcurrentHashMap<uint64_t, uint64_t, std::hash<uint64_t>, std::equal_to<>> ft(kFtRootSize,
-                                                                                   20);
+    ConcurrentHashMap<uint64_t, uint64_t, std::hash<uint64_t>, std::equal_to<>>
+            map(config.initial_size, config.max_depth);
+    ConcurrentHashMap<uint64_t, uint64_t, std::hash<uint64_t>, std::equal_to<>>
+            ft(kFtRootSize, 20);
+
     for (size_t i = 0; i < config.operations; i++) {
-        map.Insert(rng.Gen<uint64_t>(0, config.key_range), 0);
+        map.Insert(rng.GenZipf<uint64_t>(1000000000ull, 1.5), 0);
     }
 
     vector<uint64_t> keys(config.operations + 1000);
-    for (auto &key : keys) key = rng.Gen<uint64_t>(0, config.key_range);
+    for (auto &key : keys) key = rng.GenZipf<uint64_t>(1000000000ull, 1.5);
     vector<int> coins(config.operations + 1000);
     for (auto &coin: coins) coin = rng.FlipCoin(config.read_ratio);
-    vector<uint64_t> ft_keys(kFtRange, 0);
-    for (auto &key : ft_keys) key = rng.Gen<uint64_t>(0, kFtRange);
     vector<thread> threads(config.thread_count);
     vector<size_t> times(config.thread_count, 0);
 
-    auto worker = [per_thread_task](size_t idx, Map &map, uint64_t *keys, int *coins, size_t &time) {
+    auto worker = [per_thread_task](size_t idx, Map &map, Map &ft,
+                                    uint64_t *keys, int *coins, size_t &time) {
         auto t = SystemTime::Now();
         uint64_t value = 0;
         for (size_t i = 0; i < kROUND; i++) {
             for (size_t j = 0; j < per_thread_task; j++) {
+                uint64_t key = keys[j];
+                Map *curr = key < 60000 ? &ft : &map;
                 if (coins[j]) {
-                    map.Find(keys[j], value);
+                    curr->Find(key, value);
                 } else {
-                    map.Insert(keys[j], keys[j] + idx);
-                }
-            }
-        }
-        time = SystemTime::Now().DurationSince<std::chrono::microseconds>(t);
-    };
-
-    auto ft_worker = [per_thread_task](size_t idx, Map &map, vector<uint64_t> &keys, int *coins, size_t &time) {
-        auto t = SystemTime::Now();
-        uint64_t value = 0;
-        size_t size = keys.size();
-        for (size_t i = 0; i < kROUND; i++) {
-            for (size_t j = 0, k = 0; j < per_thread_task; j++, k++) {
-                if (k >= size) k = 0;
-                if (coins[j]) {
-                    map.Find(keys[k], value);
-                } else {
-                    map.Insert(keys[k], keys[k] + idx);
+                    curr->Insert(key, key + idx);
                 }
             }
         }
@@ -127,13 +112,9 @@ int main(int argc, const char *argv[]) {
     };
 
     for (size_t i = 0; i < threads.size(); i++) {
-        if ((i & 1ull) == 0) {
-            threads[i] = thread(worker, i, std::ref(map), keys.data() + i * per_thread_task,
-                                coins.data() + i * per_thread_task, std::ref(times[i]));
-        } else {
-            threads[i] = thread(ft_worker, i, std::ref(ft), std::ref(ft_keys), coins.data() + i * per_thread_task,
-                                std::ref(times[i]));
-        }
+        threads[i] = thread(worker, i, std::ref(map), std::ref(ft),
+                            keys.data() + i * per_thread_task, coins.data() + i * per_thread_task,
+                            std::ref(times[i]));
     }
 
     for (auto &t : threads) t.join();
