@@ -96,21 +96,29 @@ int main(int argc, const char *argv[]) {
     }
     vector<int> coins(config.operations + 1000);
     for (auto &coin: coins) coin = rng.FlipCoin(config.read_ratio);
+    cout << config.read_ratio << endl;
     vector<thread> threads(config.thread_count);
     vector<size_t> times(config.thread_count, 0);
 
     auto worker = [per_thread_task](size_t idx, Map &map, Map &ft,
-                                    uint64_t *keys, int *coins, size_t &time) {
+                                    const uint64_t *keys, const int *coins, size_t &time) {
         auto t = SystemTime::Now();
         uint64_t value = 0;
         for (size_t i = 0; i < kROUND; i++) {
             for (size_t j = 0; j < per_thread_task; j++) {
                 uint64_t key = keys[j];
-                Map *curr = key < 60000 ? &ft : &map;
-                if (coins[j]) {
-                    curr->Find(key, value);
+                if (key < 60000) {
+                    if (coins[j]) {
+                        ft.Find(key, value);
+                    } else {
+                        ft.Insert(key, key + idx);
+                    }
                 } else {
-                    curr->Insert(key, key + idx);
+                    if (coins[j]) {
+                        map.Find(key, value);
+                    } else {
+                        map.Insert(key, key + idx);
+                    }
                 }
             }
         }
