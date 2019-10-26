@@ -10,3 +10,6 @@ target_compile_definitions(haz_debug_1 PUBLIC HAZ_PTR_DEBUG)
 
 add_executable(hash_map_bench hash_map_bench.cpp)
 target_link_libraries(hash_map_bench ${UTIL_LIB} ${Boost_LIBRARIES} ${FOLLY_LIBRARIES} unwind)
+
+add_executable(ft_emulate fast_table_emulate.cpp)
+target_link_libraries(ft_emulate ${UTIL_LIB} ${Boost_LIBRARIES} ${FOLLY_LIBRARIES} unwind)
