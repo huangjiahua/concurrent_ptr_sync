@@ -78,11 +78,11 @@ int main(int argc, const char *argv[]) {
     ConcurrentHashMap<uint64_t, uint64_t, std::hash<uint64_t>, std::equal_to<>> map(config.initial_size,
                                                                                     config.max_depth);
     for (size_t i = 0; i < config.operations; i++) {
-        map.Insert(rng.Gen<uint64_t>(0, config.key_range), 0);
+        map.Insert(rng.GenZipf<uint64_t>(1000000000ull, 1.5), 0);
     }
 
     vector<uint64_t> keys(config.operations + 1000);
-    for (auto &key : keys) key = rng.Gen<uint64_t>(0, config.key_range);
+    for (auto &key : keys) key = rng.GenZipf<uint64_t>(1000000000ull, 1.5);
     vector<int> coins(config.operations + 1000);
     for (auto &coin: coins) coin = rng.FlipCoin(config.read_ratio);
     vector<thread> threads(config.thread_count);
