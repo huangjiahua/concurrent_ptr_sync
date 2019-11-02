@@ -13,3 +13,8 @@ target_link_libraries(hash_map_bench ${UTIL_LIB} ${Boost_LIBRARIES} ${FOLLY_LIBR
 
 add_executable(ft_emulate fast_table_emulate.cpp)
 target_link_libraries(ft_emulate ${UTIL_LIB} ${Boost_LIBRARIES} ${FOLLY_LIBRARIES} unwind)
+
+add_executable(zip_fan_test zip_fan_test.cpp)
+
+add_executable(fast_table fast_table_test.cpp)
+target_link_libraries(fast_table ${UTIL_LIB} ${Boost_LIBRARIES} ${FOLLY_LIBRARIES} unwind)

@@ -3,6 +3,7 @@
 //
 #include "hash_map/concurrent_hash_map.h"
 #include "general_bench.h"
+#include "hash_map/fast_table.h"
 #include <vector>
 
 constexpr static size_t kDefaultInitSize = 65536;
@@ -60,12 +61,12 @@ struct HMBConfig {
                 only_tp = true;
             } else if (arg == "--zipf") {
                 if (i + 1 > argc) {
-		   Panic("param error");
-		}
-		i++;
-		auto s = std::string(argv[i]);
-		zipf_factor = std::stod(s);
-	    } else {
+                    Panic("param error");
+                }
+                i++;
+                auto s = std::string(argv[i]);
+                zipf_factor = std::stod(s);
+            } else {
                 Panic("param error");
             }
         }
@@ -74,37 +75,66 @@ struct HMBConfig {
 
 using namespace std;
 using Map = ConcurrentHashMap<uint64_t, uint64_t, std::hash<uint64_t>, std::equal_to<>>;
+using Ft = FastTable<uint64_t, uint64_t>;
 
 constexpr static size_t kROUND = 10;
+constexpr static size_t kFtRootSize = 65536;
+constexpr static size_t kFtRange = 10000;
 
 int main(int argc, const char *argv[]) {
     HMBConfig config;
     config.LoadConfig(argc, argv);
     RandomGenerator rng;
     size_t per_thread_task = config.operations / config.thread_count;
+    size_t core = 0;
+    HazPtrInit(config.thread_count);
 
-    ConcurrentHashMap<uint64_t, uint64_t, std::hash<uint64_t>, std::equal_to<>> map(config.initial_size,
-                                                                                    config.max_depth);
+    ConcurrentHashMap<uint64_t, uint64_t, std::hash<uint64_t>, std::equal_to<>>
+            map(config.initial_size, config.max_depth);
+    FastTable<uint64_t, uint64_t> ft(8192);
+
+
     for (size_t i = 0; i < config.operations; i++) {
         map.Insert(rng.GenZipf<uint64_t>(1000000000ull, config.zipf_factor), 0);
+        uint64_t key = rng.GenZipf<uint64_t>(1000000000ull, config.zipf_factor);
+        ft.Insert(key, key, 0ull);
     }
 
     vector<uint64_t> keys(config.operations + 1000);
-    for (auto &key : keys) key = rng.GenZipf<uint64_t>(1000000000ull, config.zipf_factor);
+    for (auto &key : keys) {
+        key = rng.GenZipf<uint64_t>(1000000000ull, config.zipf_factor);
+        if (key < 60000) {
+            core++;
+        }
+    }
     vector<int> coins(config.operations + 1000);
     for (auto &coin: coins) coin = rng.FlipCoin(config.read_ratio);
     vector<thread> threads(config.thread_count);
     vector<size_t> times(config.thread_count, 0);
 
-    auto worker = [per_thread_task](size_t idx, Map &map, uint64_t *keys, int *coins, size_t &time) {
+    auto worker = [per_thread_task](size_t idx, Map &map, Ft &ft,
+                                    const uint64_t *keys, const int *coins, size_t &time) {
         auto t = SystemTime::Now();
         uint64_t value = 0;
         for (size_t i = 0; i < kROUND; i++) {
             for (size_t j = 0; j < per_thread_task; j++) {
-                if (coins[j]) {
-                    map.Find(keys[j], value);
+                uint64_t key = keys[j];
+                if (key < 60000) {
+                    if (coins[j]) {
+                        HazPtrHolder h;
+                        auto p = ft.PinnedFind(key, key, h);
+                        if (p) {
+                            value = p->Value();
+                        }
+                    } else {
+                        ft.Insert(key, key, key + idx);
+                    }
                 } else {
-                    map.Insert(keys[j], keys[j] + idx);
+                    if (coins[j]) {
+                        map.Find(key, value);
+                    } else {
+                        map.Insert(key, key + idx);
+                    }
                 }
             }
         }
@@ -112,8 +142,9 @@ int main(int argc, const char *argv[]) {
     };
 
     for (size_t i = 0; i < threads.size(); i++) {
-        threads[i] = thread(worker, i, std::ref(map), keys.data() + i * per_thread_task,
-                            coins.data() + i * per_thread_task, std::ref(times[i]));
+        threads[i] = thread(worker, i, std::ref(map), std::ref(ft),
+                            keys.data() + i * per_thread_task, coins.data() + i * per_thread_task,
+                            std::ref(times[i]));
     }
 
     for (auto &t : threads) t.join();
@@ -126,3 +157,4 @@ int main(int argc, const char *argv[]) {
     return 0;
 }
 
+ENABLE_LOCAL_DOMAIN

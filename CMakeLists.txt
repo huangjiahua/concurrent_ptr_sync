@@ -54,4 +54,8 @@ add_executable(haz_ptr_impl haz_ptr_impl.cpp general_bench.cpp)
 target_link_libraries(haz_ptr_impl ${UTIL_LIB} ${Boost_LIBRARIES} ${FOLLY_LIBRARIES} unwind)
 target_compile_definitions(haz_ptr_impl PUBLIC HAZ_PTR)
 
+add_executable(my_haz_ptr_impl my_haz_ptr_impl.cpp general_bench.cpp)
+target_link_libraries(my_haz_ptr_impl ${UTIL_LIB})
+target_compile_definitions(my_haz_ptr_impl PUBLIC MY_HAZ_PTR)
+
 add_subdirectory(hash_map)

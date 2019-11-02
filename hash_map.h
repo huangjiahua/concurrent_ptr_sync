@@ -37,6 +37,9 @@ struct Wrapper : public hazptr_obj_base<Wrapper> {
 };
 
 #endif
+#ifdef MY_HAZ_PTR
+#include "my_haz_ptr/haz_ptr.h"
+#endif
 
 // hash map related
 template<typename T, typename V = T>
@@ -57,6 +60,9 @@ public:
 #endif
 #ifdef HAZ_PTR
     std::vector<std::atomic<Wrapper*>> haz_ptrs_;
+#endif
+#ifdef MY_HAZ_PTR
+    std::vector<std::atomic<const T *>> haz_atomics_;
 #endif
 
     explicit HashMap(size_t size);
