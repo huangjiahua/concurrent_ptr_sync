@@ -10,7 +10,7 @@
 #include "haz_ptr/haz_ptr.h"
 
 template<typename K, typename V>
-class FastTableNode: public hazptr_obj_base<FastTableNode<K, V>> {
+class FastTableNode : public hazptr_obj_base<FastTableNode<K, V>> {
 public:
     using KVPair = std::pair<K, V>;
     KVPair data_;
@@ -67,7 +67,7 @@ public:
         Node *node = new Node(key, value);
         size_t idx = GetIdx(hash);
         Node *old = table_[idx].atom_ptr_.exchange(node);
-        old->retire();
+        if (old) old->retire();
     }
 
     Node *PinnedFind(size_t hash, const KeyType &key, hazptr_holder<> &holder) {
