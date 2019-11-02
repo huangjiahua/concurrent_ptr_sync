@@ -15,6 +15,7 @@ struct HMBConfig {
     size_t key_range = kDefaultKeyRange;
     double read_ratio = 0.9;
     size_t max_depth = 20;
+    double zipf_factor = 1.0;
     bool only_tp = false;
 
     void LoadConfig(int argc, const char *argv[]) {
@@ -57,7 +58,14 @@ struct HMBConfig {
                 }
                 i++;
                 only_tp = true;
-            } else {
+            } else if (arg == "--zipf") {
+                if (i + 1 > argc) {
+		   Panic("param error");
+		}
+		i++;
+		auto s = std::string(argv[i]);
+		zipf_factor = std::stod(s);
+	    } else {
                 Panic("param error");
             }
         }
@@ -78,11 +86,11 @@ int main(int argc, const char *argv[]) {
     ConcurrentHashMap<uint64_t, uint64_t, std::hash<uint64_t>, std::equal_to<>> map(config.initial_size,
                                                                                     config.max_depth);
     for (size_t i = 0; i < config.operations; i++) {
-        map.Insert(rng.GenZipf<uint64_t>(1000000000ull, 1.5), 0);
+        map.Insert(rng.GenZipf<uint64_t>(1000000000ull, config.zipf_factor), 0);
     }
 
     vector<uint64_t> keys(config.operations + 1000);
-    for (auto &key : keys) key = rng.GenZipf<uint64_t>(1000000000ull, 1.5);
+    for (auto &key : keys) key = rng.GenZipf<uint64_t>(1000000000ull, config.zipf_factor);
     vector<int> coins(config.operations + 1000);
     for (auto &coin: coins) coin = rng.FlipCoin(config.read_ratio);
     vector<thread> threads(config.thread_count);
