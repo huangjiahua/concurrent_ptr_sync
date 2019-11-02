@@ -7,10 +7,10 @@
 #include <atomic>
 #include <memory>
 
-#include "my_haz_ptr/haz_ptr.h"
+#include "haz_ptr/haz_ptr.h"
 
 template<typename K, typename V>
-class FastTableNode {
+class FastTableNode: public hazptr_obj_base<FastTableNode<K, V>> {
 public:
     using KVPair = std::pair<K, V>;
     KVPair data_;
@@ -28,11 +28,11 @@ public:
     ~FastTableNode() = default;
 };
 
-template<typename K, typename V>
+template<typename N>
 class alignas(128) FastTableSlot {
 public:
     template<typename T> using Atom = std::atomic<T>;
-    Atom<FastTableNode<K, V> *> atom_ptr_;
+    Atom<N *> atom_ptr_;
 
     FastTableSlot() : atom_ptr_{nullptr} {}
 
@@ -44,7 +44,7 @@ class FastTable {
 private:
     template<typename T> using Atom = std::atomic<T>;
     using Node = FastTableNode<KeyType, ValueType>;
-    using Slot = FastTableSlot<KeyType, ValueType>;
+    using Slot = FastTableSlot<Node>;
     size_t size_;
     Slot *table_;
 public:
@@ -67,14 +67,14 @@ public:
         Node *node = new Node(key, value);
         size_t idx = GetIdx(hash);
         Node *old = table_[idx].atom_ptr_.exchange(node);
-        HazPtrRetire(old);
+        old->retire();
     }
 
-    Node *PinnedFind(size_t hash, const KeyType &key, HazPtrHolder &holder) {
+    Node *PinnedFind(size_t hash, const KeyType &key, hazptr_holder<> &holder) {
         size_t idx = GetIdx(hash);
-        Node *node = holder.Pin(table_[idx].atom_ptr_);
+        Node *node = holder.get_protected(table_[idx].atom_ptr_);
         if (!node || node->Key() != key) {
-            holder.Reset();
+            holder.reset(nullptr);
             return nullptr;
         }
         return node;

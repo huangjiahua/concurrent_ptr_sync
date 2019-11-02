@@ -87,7 +87,7 @@ int main(int argc, const char *argv[]) {
     RandomGenerator rng;
     size_t per_thread_task = config.operations / config.thread_count;
     size_t core = 0;
-    HazPtrInit(config.thread_count);
+//    HazPtrInit(config.thread_count);
 
     ConcurrentHashMap<uint64_t, uint64_t, std::hash<uint64_t>, std::equal_to<>>
             map(config.initial_size, config.max_depth);
@@ -121,7 +121,7 @@ int main(int argc, const char *argv[]) {
                 uint64_t key = keys[j];
                 if (key < 60000) {
                     if (coins[j]) {
-                        HazPtrHolder h;
+                        hazptr_holder<> h;
                         auto p = ft.PinnedFind(key, key, h);
                         if (p) {
                             value = p->Value();
@@ -157,4 +157,3 @@ int main(int argc, const char *argv[]) {
     return 0;
 }
 
-ENABLE_LOCAL_DOMAIN
