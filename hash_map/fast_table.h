@@ -70,6 +70,36 @@ public:
         if (old) old->retire();
     }
 
+    bool CheckedInsert(size_t hash, const KeyType &key, const ValueType &value) {
+        size_t idx = GetIdx(hash);
+        hazptr_holder<> holder;
+        Node *old_node = holder.get_protected(table_[idx].atom_ptr_);
+        if (old_node && old_node->Key() != key) {
+            return false;
+        }
+        Node *node = new Node(key, value);
+        bool res = table_[idx].atom_ptr_.compare_exchange_strong(old_node, node, std::memory_order_acq_rel);
+        if (!res) {
+            delete node;
+        }
+        return res;
+    }
+
+    bool TryUpdate(size_t hash, const KeyType &key, const ValueType &value) {
+        size_t idx = GetIdx(hash);
+        hazptr_holder<> holder;
+        Node *old_node = holder.get_protected(table_[idx].atom_ptr_);
+        if (old_node && old_node->Key() == key) {
+            Node *node = new Node(key, value);
+            bool res = table_[idx].atom_ptr_.compare_exchange_strong(old_node, node, std::memory_order_acq_rel);
+            if (!res) {
+                delete node;
+            }
+            return res;
+        }
+        return false;
+    }
+
     Node *PinnedFind(size_t hash, const KeyType &key, hazptr_holder<> &holder) {
         size_t idx = GetIdx(hash);
         Node *node = holder.get_protected(table_[idx].atom_ptr_);

@@ -8,9 +8,13 @@
 #include <cstdint>
 #include <atomic>
 #include <cassert>
+#include <iostream>
 #include <array>
 
 #include "haz_ptr/haz_ptr.h"
+#include "hash_map/fast_table.h"
+#include "hash_map/thread.h"
+#include "heavyhitter/GeneralLazySS.h"
 
 #ifdef HAZ_PTR_DEBUG
 extern std::atomic<size_t> haz_debug_cnt;
@@ -42,6 +46,37 @@ size_t powerOf2(size_t n) {
     }
     return ret;
 }
+
+struct ThreadIndexer {
+    std::mutex mut_;
+    std::array<bool, 128> place_holders_;
+
+
+    ThreadIndexer() : place_holders_() {
+        for (auto &i : place_holders_) {
+            i = false;
+        }
+    }
+
+    size_t Get() {
+        constexpr size_t kImpossible = 1000;
+        thread_local size_t l_idx{kImpossible};
+        if (l_idx == kImpossible) {
+            std::lock_guard<std::mutex> lk(mut_);
+            for (size_t i = 0; i < place_holders_.size(); i++) {
+                if (!place_holders_[i]) {
+                    place_holders_[i] = true;
+                    l_idx = i;
+                    return (size_t) l_idx;
+                }
+            }
+            std::cerr << "Thread count exceed limit" << std::endl;
+            exit(1);
+        }
+        assert(l_idx != kImpossible);
+        return (size_t) l_idx;
+    }
+};
 }
 
 enum class InsertType {
@@ -367,7 +402,7 @@ private:
                 prev->store(cur, std::memory_order_release);
                 g.unlock();
                 node->retire([](InnerNode *n) {
-                    Allocator().deallocate((uint8_t*)n, sizeof(InnerNode));
+                    Allocator().deallocate((uint8_t *) n, sizeof(InnerNode));
                 });
                 return true;
             }
@@ -472,6 +507,11 @@ private:
 
 } // namespace bucket
 
+struct ThreadHashMapStat {
+    GeneralLazySS<size_t> ss_{0.001};
+    size_t total_{0};
+};
+
 
 template<typename KeyType, typename ValueType, typename HashFn, typename KeyEqual>
 class ConcurrentHashMap {
@@ -487,7 +527,8 @@ class ConcurrentHashMap {
     static constexpr size_t kMaxDepth = 10;
     using ArrayNodeT = ArrayNode<kArrayNodeSize>;
 public:
-    ConcurrentHashMap(size_t root_size, size_t max_depth) {
+    ConcurrentHashMap(size_t root_size, size_t max_depth) :
+            ft_(65536), stat_(64, ThreadHashMapStat()) {
         root_size_ = util::nextPowerOf2(root_size);
         root_bits_ = util::powerOf2(root_size_);
         size_t remain = kHashWordLength - root_bits_;
@@ -504,112 +545,54 @@ public:
         }
     }
 
+
     bool Insert(const KeyType &k, const ValueType &v, InsertType type = InsertType::ANY) {
         size_t h = HashFn()(k);
-        size_t n = 0;
-        hazptr_array<2> haz_arr;
-        size_t curr_holder_idx = 0;
 
-        size_t idx = GetRootIdx(h);
-        Atom<TreeNode *> *node_ptr = &root_[idx];
-        TreeNode *node = nullptr;
+        if (ft_.TryUpdate(h, k, v)) {
+            return true;
+        }
+
+        size_t tid = Thread::id();
+        stat_[tid].ss_.put(h);
+        stat_[tid].total_++;
+        if (stat_[tid].ss_.find(h)->getCount() > (stat_[tid].total_ >> 3ull)) {
+            if (ft_.CheckedInsert(h, k, v)) {
+                return true;
+            }
+        }
+
         DataNodeT *new_node = (DataNodeT *) Allocator().allocate(sizeof(DataNodeT));
         new(new_node) DataNodeT(k, v);
         std::unique_ptr<DataNodeT, std::function<void(DataNodeT *)>> ptr(new_node, [](DataNodeT *n) {
             n->~DataNode();
             Allocator().deallocate((uint8_t *) n, sizeof(DataNodeT));
         });
-        while (true) {
-            curr_holder_idx = (curr_holder_idx + 1ull) & 1ull;
-            hazptr_holder<> &holder = haz_arr[curr_holder_idx];
-            hazptr_holder<> &next_holder = haz_arr[(curr_holder_idx + 1ull) & 1ull];
 
-            node = holder.get_protected(*node_ptr);
-
-            if (!node) {
-                if (type == InsertType::MUST_EXIST) {
-                    return false;
-                }
-
-                bool result = node_ptr->compare_exchange_strong(node, (TreeNode *) ptr.get(),
-                                                                std::memory_order_acq_rel);
-                if (!result) {
-                    holder.reset(nullptr);
-                    continue;
-                }
-                ptr.release();
-                return true;
-            } else {
-                switch (node->Type()) {
-                    case TreeNodeType::DATA_NODE: {
-                        if (type == InsertType::DOES_NOT_EXIST) {
-                            return false;
-                        }
-                        DataNodeT *d_node = static_cast<DataNodeT *>(node);
-                        if (KeyEqual()(d_node->kv_pair_.first, k)) {
-                            bool result = node_ptr->compare_exchange_strong(node, ptr.get(), std::memory_order_acq_rel);
-                            if (!result) {
-                                holder.reset(nullptr);
-                                continue;
-                            }
-                            ptr.release();
-                            d_node->retire();
-                            return true;
-                        } else {
-                            if (n < max_depth_ - 1) {
-                                std::unique_ptr<ArrayNodeT> tmp_arr_ptr(new ArrayNodeT);
-                                size_t tmp_hash = HashFn()(d_node->kv_pair_.first);
-                                size_t tmp_idx = GetNthIdx(tmp_hash, n + 1);
-                                tmp_arr_ptr->array_[tmp_idx].store(node, std::memory_order_relaxed);
-                                bool result = node_ptr->compare_exchange_strong(node, (TreeNode *) tmp_arr_ptr.get(),
-                                                                                std::memory_order_acq_rel);
-                                holder.reset(nullptr);
-                                if (result) {
-                                    n++;
-                                    size_t curr_idx = GetNthIdx(h, n);
-                                    node_ptr = &tmp_arr_ptr->array_[curr_idx];
-                                    tmp_arr_ptr.release();
-                                }
-                                continue;
-                            } else {
-                                std::unique_ptr<BucketMapT> tmp_bkt_map(new BucketMapT(4, 1.0, 100000));
-                                typename BucketMapT::Iterator iter;
-                                tmp_bkt_map->Insert(iter, d_node->kv_pair_.first, d_node->kv_pair_.second,
-                                                    InsertType::DOES_NOT_EXIST);
-                                bool result = node_ptr->compare_exchange_strong(node, (TreeNode *) tmp_bkt_map.get(),
-                                                                                std::memory_order_acq_rel);
-                                holder.reset(nullptr);
-                                if (result) {
-                                    n++;
-                                    tmp_bkt_map.release();
-                                    d_node->retire();
-                                }
-                                continue;
-                            }
-                        }
-                    }
-                    case TreeNodeType::ARRAY_NODE: {
-                        n++;
-                        holder.reset(nullptr);
-                        ArrayNodeT *arr_node = static_cast<ArrayNodeT *>(node);
-                        size_t curr_idx = GetNthIdx(h, n);
-                        node_ptr = &arr_node->array_[curr_idx];
-                        continue;
-                    }
-                    case TreeNodeType::BUCKETS_NODE: {
-                        BucketMapT *bkt = static_cast<BucketMapT *>(node);
-                        typename BucketMapT::Iterator iter;
-                        bool result = bkt->Insert(iter, k, v, type);
-                        ptr.release();
-                        return result;
-                    }
-                }
-            }
-        }
+        return DoInsert(h, k, ptr, type);
     }
 
     bool Find(const KeyType &k, ValueType &v) {
+        thread_local size_t counter{0};
+        counter++;
+
         size_t h = HashFn()(k);
+
+        if ((counter & (0x03ull)) == 0) {
+            size_t tid = Thread::id();
+            stat_[tid].ss_.put(h);
+            stat_[tid].total_++;
+        }
+
+        {
+            hazptr_holder<> holder;
+            auto node = ft_.PinnedFind(h, k, holder);
+            if (node) {
+                v = node->Value();
+                return true;
+            }
+        }
+
         size_t n = 0;
         hazptr_array<2> haz_arr;
         size_t curr_holder_idx = 0;
@@ -675,11 +658,116 @@ private:
         return (h & (kArrayNodeSize - 1));
     }
 
+    bool DoInsert(size_t h, const KeyType &k, std::unique_ptr<DataNodeT, std::function<void(DataNodeT *)>> &ptr,
+                  InsertType type) {
+        size_t n = 0;
+        hazptr_array<2> haz_arr;
+        size_t curr_holder_idx = 0;
+
+        size_t idx = GetRootIdx(h);
+        Atom<TreeNode *> *node_ptr = &root_[idx];
+        TreeNode *node = nullptr;
+        while (true) {
+            curr_holder_idx = (curr_holder_idx + 1ull) & 1ull;
+            hazptr_holder<> &holder = haz_arr[curr_holder_idx];
+            hazptr_holder<> &next_holder = haz_arr[(curr_holder_idx + 1ull) & 1ull];
+
+            node = holder.get_protected(*node_ptr);
+
+            if (!node) {
+                if (type == InsertType::MUST_EXIST) {
+                    return false;
+                }
+
+                bool result = node_ptr->compare_exchange_strong(node, (TreeNode *) ptr.get(),
+                                                                std::memory_order_acq_rel);
+                if (!result) {
+                    holder.reset(nullptr);
+                    continue;
+                }
+                ptr.release();
+                return true;
+            } else {
+                switch (node->Type()) {
+                    case TreeNodeType::DATA_NODE: {
+                        if (type == InsertType::DOES_NOT_EXIST) {
+                            return false;
+                        }
+                        DataNodeT *d_node = static_cast<DataNodeT *>(node);
+                        if (KeyEqual()(d_node->kv_pair_.first, k)) {
+                            bool result = node_ptr->compare_exchange_strong(node, ptr.get(), std::memory_order_acq_rel);
+                            if (!result) {
+                                holder.reset(nullptr);
+                                continue;
+                            }
+                            ptr.release();
+                            d_node->retire();
+                            return true;
+                        } else {
+                            if (n < max_depth_ - 1) {
+                                std::unique_ptr<ArrayNodeT> tmp_arr_ptr(new ArrayNodeT);
+                                size_t tmp_hash = HashFn()(d_node->kv_pair_.first);
+                                size_t tmp_idx = GetNthIdx(tmp_hash, n + 1);
+                                tmp_arr_ptr->array_[tmp_idx].store(node, std::memory_order_relaxed);
+                                bool result = node_ptr->compare_exchange_strong(node, (TreeNode *) tmp_arr_ptr.get(),
+                                                                                std::memory_order_acq_rel);
+                                holder.reset(nullptr);
+                                if (result) {
+                                    n++;
+                                    size_t curr_idx = GetNthIdx(h, n);
+                                    node_ptr = &tmp_arr_ptr->array_[curr_idx];
+                                    tmp_arr_ptr.release();
+                                }
+                                continue;
+                            } else {
+//                                std::unique_ptr<BucketMapT> tmp_bkt_map(new BucketMapT(4, 1.0, 100000));
+//                                typename BucketMapT::Iterator iter;
+//                                tmp_bkt_map->Insert(iter, d_node->kv_pair_.first, d_node->kv_pair_.second,
+//                                                    InsertType::DOES_NOT_EXIST);
+//                                bool result = node_ptr->compare_exchange_strong(node, (TreeNode *) tmp_bkt_map.get(),
+//                                                                                std::memory_order_acq_rel);
+//                                holder.reset(nullptr);
+//                                if (result) {
+//                                    n++;
+//                                    tmp_bkt_map.release();
+//                                    d_node->retire();
+//                                }
+//                                continue;
+                                std::cerr << "Not Implemented Yet" << std::endl;
+                                exit(1);
+                            }
+                        }
+                    }
+                    case TreeNodeType::ARRAY_NODE: {
+                        n++;
+                        holder.reset(nullptr);
+                        ArrayNodeT *arr_node = static_cast<ArrayNodeT *>(node);
+                        size_t curr_idx = GetNthIdx(h, n);
+                        node_ptr = &arr_node->array_[curr_idx];
+                        continue;
+                    }
+                    case TreeNodeType::BUCKETS_NODE: {
+//                        BucketMapT *bkt = static_cast<BucketMapT *>(node);
+//                        typename BucketMapT::Iterator iter;
+//                        bool result = bkt->Insert(iter, k, v, type);
+//                        ptr.release();
+//                        return result;
+                        std::cerr << "Not Implemented Yet" << std::endl;
+                        exit(1);
+                    }
+                }
+            }
+        }
+    }
+
 private:
     Atom<TreeNode *> *root_{nullptr};
     std::function<size_t(const KeyType &)> bucket_map_hasher_;
+    FastTable<KeyType, ValueType> ft_;
+    std::vector<ThreadHashMapStat> stat_;
     size_t root_size_{0};
     size_t root_bits_{0};
     size_t max_depth_{0};
+    bool enable_fast_table_{true};
 };
 
