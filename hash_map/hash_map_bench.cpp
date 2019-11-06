@@ -4,12 +4,13 @@
 #include "hash_map/concurrent_hash_map.h"
 #include "general_bench.h"
 #include <vector>
+#include <fstream>
 
 constexpr static size_t kDefaultInitSize = 65536;
 constexpr static size_t kDefaultKeyRange = 10000000;
 
 struct HMBConfig {
-    size_t thread_count = 12;
+    size_t thread_count = 2;
     size_t operations = kDefaultOperations;
     size_t initial_size = kDefaultInitSize;
     size_t key_range = kDefaultKeyRange;
@@ -60,12 +61,12 @@ struct HMBConfig {
                 only_tp = true;
             } else if (arg == "--zipf") {
                 if (i + 1 > argc) {
-		   Panic("param error");
-		}
-		i++;
-		auto s = std::string(argv[i]);
-		zipf_factor = std::stod(s);
-	    } else {
+                    Panic("param error");
+                }
+                i++;
+                auto s = std::string(argv[i]);
+                zipf_factor = std::stod(s);
+            } else {
                 Panic("param error");
             }
         }

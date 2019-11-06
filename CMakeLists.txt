@@ -59,3 +59,4 @@ target_link_libraries(my_haz_ptr_impl ${UTIL_LIB})
 target_compile_definitions(my_haz_ptr_impl PUBLIC MY_HAZ_PTR)
 
 add_subdirectory(hash_map)
+add_subdirectory(heavyhitter)
