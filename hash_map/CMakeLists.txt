@@ -1,4 +1,4 @@
-add_executable(conc_hash_map concurrent_hash_test.cpp)
+add_executable(conc_hash_map concurrent_hash_test.cpp thread.cpp)
 target_link_libraries(conc_hash_map ${UTIL_LIB} ${Boost_LIBRARIES} ${FOLLY_LIBRARIES} unwind)
 
 add_executable(bucket_map_bench bucket_map_bench.cpp)
