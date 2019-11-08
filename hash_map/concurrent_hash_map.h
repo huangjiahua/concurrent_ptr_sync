@@ -597,7 +597,7 @@ public:
 
         size_t h = HashFn()(k);
 
-        if ((counter & (0x03ull)) == 0) {
+        if ((counter & (0x0full)) == 0) {
             size_t tid = Thread::id();
             stat_[tid].Record(h);
         }

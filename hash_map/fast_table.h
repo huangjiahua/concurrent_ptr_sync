@@ -104,7 +104,9 @@ public:
         size_t idx = GetIdx(hash);
         Node *node = holder.Pin(table_[idx].atom_ptr_);
         if (!node || node->Key() != key) {
-            holder.Reset();
+            if (node) {
+                holder.Reset();
+            }
             return nullptr;
         }
         return node;
