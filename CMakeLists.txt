@@ -10,7 +10,7 @@ set(
         pthread
 )
 
-find_package(Boost 1.50.0 REQUIRED COMPONENTS atomic)
+find_package(Boost 1.50.0 REQUIRED COMPONENTS atomic context filesystem program_options regex system thread)
 
 add_executable(no_op no_op_impl.cpp general_bench.cpp)
 target_link_libraries(no_op ${UTIL_LIB})
@@ -24,10 +24,10 @@ target_link_libraries(lock_based ${UTIL_LIB})
 add_executable(unq_based unique_ownership_impl.cpp general_bench.cpp)
 target_link_libraries(unq_based ${UTIL_LIB})
 
-add_executable(boost_arc boost_arc_impl.cpp general_bench.cpp)
-target_link_libraries(boost_arc ${UTIL_LIB})
-target_compile_definitions(boost_arc PUBLIC BOOST_ARC)
-target_include_directories(boost_arc PUBLIC ${Boost_INCLUDE_DIR})
+#add_executable(boost_arc boost_arc_impl.cpp general_bench.cpp)
+#target_link_libraries(boost_arc ${UTIL_LIB})
+#target_compile_definitions(boost_arc PUBLIC BOOST_ARC)
+#target_include_directories(boost_arc PUBLIC ${Boost_INCLUDE_DIR})
 
 #add_executable(mrsw_ptr mrsw_ptr_impl.cpp general_bench.cpp)
 #target_link_libraries(mrsw_ptr ${UTIL_LIB})
@@ -39,7 +39,7 @@ target_link_libraries(atomic_add_trail ${UTIL_LIB})
 add_executable(atomic_set_trail atomic_set_trail.cpp)
 target_link_libraries(atomic_set_trail ${UTIL_LIB})
 
-find_package(Boost REQUIRED)
+#find_package(Boost REQUIRED)
 find_package(folly REQUIRED)
 find_package(Threads REQUIRED)
 find_package(gflags REQUIRED)
@@ -50,9 +50,9 @@ if (NOT TARGET Folly::folly)
     include("${FOLLY_CMAKE_DIR}/folly-targets.cmake")
 endif()
 
-add_executable(haz_ptr_impl haz_ptr_impl.cpp general_bench.cpp)
-target_link_libraries(haz_ptr_impl ${UTIL_LIB} ${Boost_LIBRARIES} ${FOLLY_LIBRARIES} unwind)
-target_compile_definitions(haz_ptr_impl PUBLIC HAZ_PTR)
+#add_executable(haz_ptr_impl haz_ptr_impl.cpp general_bench.cpp)
+#target_link_libraries(haz_ptr_impl ${UTIL_LIB} ${Boost_LIBRARIES} ${FOLLY_LIBRARIES} unwind)
+#target_compile_definitions(haz_ptr_impl PUBLIC HAZ_PTR)
 
 add_executable(my_haz_ptr_impl my_haz_ptr_impl.cpp general_bench.cpp)
 target_link_libraries(my_haz_ptr_impl ${UTIL_LIB})

@@ -7,10 +7,10 @@
 #include <atomic>
 #include <memory>
 
-#include "haz_ptr/haz_ptr.h"
+#include "my_haz_ptr/haz_ptr.h"
 
 template<typename K, typename V>
-class FastTableNode : public hazptr_obj_base<FastTableNode<K, V>> {
+class FastTableNode {
 public:
     using KVPair = std::pair<K, V>;
     KVPair data_;
@@ -67,13 +67,13 @@ public:
         Node *node = new Node(key, value);
         size_t idx = GetIdx(hash);
         Node *old = table_[idx].atom_ptr_.exchange(node);
-        if (old) old->retire();
+        if (old) HazPtrRetire(old);
     }
 
     bool CheckedInsert(size_t hash, const KeyType &key, const ValueType &value) {
         size_t idx = GetIdx(hash);
-        hazptr_holder<> holder;
-        Node *old_node = holder.get_protected(table_[idx].atom_ptr_);
+        HazPtrHolder holder;
+        Node *old_node = holder.Pin(table_[idx].atom_ptr_);
         if (old_node && old_node->Key() != key) {
             return false;
         }
@@ -87,8 +87,8 @@ public:
 
     bool TryUpdate(size_t hash, const KeyType &key, const ValueType &value) {
         size_t idx = GetIdx(hash);
-        hazptr_holder<> holder;
-        Node *old_node = holder.get_protected(table_[idx].atom_ptr_);
+        HazPtrHolder holder;
+        Node *old_node = holder.Pin(table_[idx].atom_ptr_);
         if (old_node && old_node->Key() == key) {
             Node *node = new Node(key, value);
             bool res = table_[idx].atom_ptr_.compare_exchange_strong(old_node, node, std::memory_order_acq_rel);
@@ -100,11 +100,11 @@ public:
         return false;
     }
 
-    Node *PinnedFind(size_t hash, const KeyType &key, hazptr_holder<> &holder) {
+    Node *PinnedFind(size_t hash, const KeyType &key, HazPtrHolder &holder) {
         size_t idx = GetIdx(hash);
-        Node *node = holder.get_protected(table_[idx].atom_ptr_);
+        Node *node = holder.Pin(table_[idx].atom_ptr_);
         if (!node || node->Key() != key) {
-            holder.reset(nullptr);
+            holder.Reset();
             return nullptr;
         }
         return node;

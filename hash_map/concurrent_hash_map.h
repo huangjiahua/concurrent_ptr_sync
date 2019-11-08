@@ -11,14 +11,10 @@
 #include <iostream>
 #include <array>
 
-#include "haz_ptr/haz_ptr.h"
 #include "hash_map/fast_table.h"
 #include "hash_map/thread.h"
 #include "heavyhitter/GeneralLazySS.h"
-
-#ifdef HAZ_PTR_DEBUG
-extern std::atomic<size_t> haz_debug_cnt;
-#endif
+#include "my_haz_ptr/haz_ptr.h"
 
 namespace util {
 size_t nextPowerOf2(size_t n) {
@@ -91,7 +87,7 @@ enum class TreeNodeType {
     BUCKETS_NODE
 };
 
-class TreeNode : public hazptr_obj_base<TreeNode> {
+class TreeNode {
 public:
     virtual TreeNodeType Type() const = 0;
 
@@ -145,371 +141,374 @@ public:
     }
 };
 
-namespace bucket {
-template<typename KeyType, typename ValueType>
-struct Node : public hazptr_obj_base<Node<KeyType, ValueType>, std::atomic, std::function<void(
-        Node<KeyType, ValueType> *)>> {
-    using KVPair = std::pair<KeyType, ValueType>;
-    using Allocator = std::allocator<uint8_t>;
-    template<typename T> using Atom = std::atomic<T>;
-    using key_type = KeyType;
-    using value_type = KVPair;
-
-    Node(const KeyType &k, const ValueType &v) : kv_pair_(k, v) {}
-
-    Node(const Node &node) : kv_pair_(node.kv_pair_) {}
-
-    const value_type &GetValue() const {
-        return kv_pair_;
-    }
-
-
-    KVPair kv_pair_;
-    Atom<Node *> next_{nullptr};
-};
-
-template<typename KeyType, typename ValueType>
-class alignas(128) Buckets : public hazptr_obj_base<Buckets<KeyType, ValueType>, std::atomic, std::function<void(
-        Buckets<KeyType, ValueType> *)>> {
-    using Allocator = std::allocator<uint8_t>;
-    template<typename T> using Atom = std::atomic<T>;
-    using InnerNode = Node<KeyType, ValueType>;
-    using BucketRoot = Atom<InnerNode *>;
-public:
-    static Buckets *Create(size_t count) {
-        auto buf = Allocator().allocate(sizeof(Buckets) + sizeof(BucketRoot) * count);
-        auto buckets = new(buf) Buckets();
-        for (size_t j = 0; j < count; j++) {
-            new(&buckets->root_[j]) BucketRoot;
-            buckets->root_[j].store(nullptr);
-        }
-        return buckets;
-    }
-
-    void Destory(size_t count) {
-        for (size_t j = 0; j < count; j++) {
-            root_[j].~BucketRoot();
-        }
-        this->~Buckets();
-        Allocator().deallocate((uint8_t *) this, sizeof(BucketRoot) * count + sizeof(Buckets));
-    }
-
-    ~Buckets() {
-#ifdef HAZ_PTR_DEBUG
-        ::haz_debug_cnt.fetch_add(1);
-#endif
-    }
-
-    BucketRoot root_[0];
-};
-
-template<typename KeyType, typename ValueType, typename HashFn, typename KeyEqual>
-class BucketMap : public ::TreeNode {
-private:
-    using Allocator = std::allocator<uint8_t>;
-    using Mutex = std::mutex;
-    using BucketsT = Buckets<KeyType, ValueType>;
-    using InnerNode = Node<KeyType, ValueType>;
-    template<typename T> using Atom = std::atomic<T>;
-
-public:
-    using key_type = KeyType;
-    using value_type = std::pair<KeyType, ValueType>;
-
-    struct Iterator {
-        Iterator() = default;
-
-        explicit Iterator(std::nullptr_t) : hazptrs_(nullptr) {}
-
-        ~Iterator() = default;
-
-        void Set(InnerNode *node, BucketsT *buckets, size_t bucket_count, uint64_t idx) {
-            node_ = node;
-            buckets_ = buckets;
-            bucket_count_ = bucket_count;
-            idx_ = idx;
-        }
-
-        const value_type &operator*() const {
-            assert(node_);
-            return node_->GetValue();
-        }
-
-        const value_type *operator->() const {
-            assert(node_);
-            return &(node_->GetValue());
-        }
-
-        const Iterator &operator++() {
-            node_ = hazptrs_[2].get_protected(node_->next_);
-            hazptrs_[1].swap(hazptrs_[2]);
-            if (!node_) {
-                ++idx_;
-                Next();
-            }
-            return *this;
-        }
-
-        void Next() {
-            while (!node_) {
-                if (idx_ >= bucket_count_) {
-                    break;
-                }
-                assert(buckets_);
-                node_ = hazptrs_[1].get_protected(buckets_->root_[idx_]());
-                if (node_) {
-                    break;
-                }
-                ++idx_;
-            }
-        }
-
-        bool operator==(const Iterator &o) const {
-            return node_ == o.node_;
-        }
-
-        bool operator!=(const Iterator &o) const {
-            return !(*this == o);
-        }
-
-        Iterator &operator=(const Iterator &o) = delete;
-
-        Iterator &operator=(Iterator &&o) noexcept {
-            if (this != &o) {
-                hazptrs_ = std::move(o.hazptrs_);
-                node_ = std::exchange(o.node_, nullptr);
-                buckets_ = std::exchange(o.buckets_, nullptr);
-                bucket_count_ = std::exchange(o.bucket_count_, 0);
-                idx_ = std::exchange(o.idx_, 0);
-            }
-            return *this;
-        }
-
-        Iterator(const Iterator &o) = delete;
-
-        Iterator(Iterator &&o) noexcept
-                : hazptrs_(std::move(o.hazptrs_)),
-                  node_(std::exchange(o.node_, nullptr)),
-                  buckets_(std::exchange(o.buckets_, nullptr)),
-                  bucket_count_(std::exchange(o.bucket_count_, 0)),
-                  idx_(std::exchange(o.idx_, 0)) {}
-
-        hazptr_array<3> hazptrs_;
-        InnerNode *node_{nullptr};
-        BucketsT *buckets_{nullptr};
-        size_t bucket_count_{0};
-        uint64_t idx_{0};
-    };
-
-public:
-    BucketMap(
-            size_t initial_buckets,
-            float load_factor,
-            size_t max_size,
-            std::function<size_t(const KeyType &)> hasher = HashFn())
-            : load_factor_(load_factor), max_size_(max_size), hasher_(hasher) {
-        initial_buckets = util::nextPowerOf2(initial_buckets);
-        auto buckets = BucketsT::Create(initial_buckets);
-        buckets_.store(buckets);
-        bucket_count_.store(initial_buckets);
-        load_factor_nodes_ = load_factor_ * initial_buckets;
-    }
-
-    bool Find(Iterator &res, const KeyType &k) {
-        hazptr_holder<> &haz_curr = res.hazptrs_[1];
-        hazptr_holder<> &haz_next = res.hazptrs_[2];
-        size_t h = hasher_(k);
-        size_t bucket_count;
-        BucketsT *buckets;
-        GetBucketsPtrAndCount(buckets, bucket_count, res.hazptrs_[0]);
-
-        auto idx = GetIdx(bucket_count, h);
-        const Atom<InnerNode *> *prev = &buckets->root_[idx];
-        InnerNode *node = haz_curr.get_protected(*prev);
-        while (node) {
-            if (KeyEqual()(k, node->GetValue().first)) {
-                res.Set(node, buckets, bucket_count, idx);
-                return true;
-            }
-            node = haz_next.get_protected(node->next_);
-            haz_curr.swap(haz_next);
-        }
-        return false;
-    }
-
-    bool Insert(Iterator &it, const KeyType &k, const ValueType &v, InsertType type) {
-        return DoInsert(it, k, v, type, nullptr);
-    }
-
-    ::TreeNodeType Type() const override {
-        return ::TreeNodeType::BUCKETS_NODE;
-    }
-
-private:
-    void GetBucketsPtrAndCount(BucketsT *&buckets, size_t &count, hazptr_holder<> &holder) {
-        while (true) {
-            auto seq_lock = seq_lock_.load(std::memory_order_acquire);
-            count = bucket_count_.load(std::memory_order_acquire);
-            buckets = holder.get_protected(buckets_);
-            auto seq_lock2 = seq_lock_.load(std::memory_order_acquire);
-            if (!(seq_lock & 1) && (seq_lock == seq_lock2)) {
-                break;
-            }
-        }
-    }
-
-    size_t GetIdx(size_t bucket_count, size_t hash) {
-        return (hash & (bucket_count - 1));
-    }
-
-    bool DoInsert(Iterator &it, const KeyType &k, const ValueType &v, InsertType type, InnerNode *cur) {
-        size_t h = hasher_(k);
-        std::unique_lock<Mutex> g(mut_);
-
-        size_t bucket_count = bucket_count_.load(std::memory_order_relaxed);
-        auto buckets = buckets_.load(std::memory_order_relaxed);
-        if (size_ >= load_factor_nodes_ && type == InsertType::DOES_NOT_EXIST) {
-            Rehash(bucket_count << 1ull);
-            buckets = buckets_.load(std::memory_order_relaxed);
-            bucket_count = bucket_count_.load(std::memory_order_relaxed);
-        }
-
-        size_t idx = GetIdx(bucket_count, h);
-        assert(idx < bucket_count);
-        Atom<InnerNode *> *head = &buckets->root_[idx];
-        InnerNode *node = head->load(std::memory_order_relaxed);
-        InnerNode *head_node = node;
-        Atom<InnerNode *> *prev = head;
-        auto &haz_buckets = it.hazptrs_[0];
-        auto &haz_node = it.hazptrs_[1];
-        haz_buckets.reset(buckets);
-        while (node) {
-            if (KeyEqual()(k, node->GetValue().first)) {
-                // key found
-                it.Set(node, buckets, bucket_count, idx);
-                haz_node.reset(node);
-                if (type == InsertType::DOES_NOT_EXIST) {
-                    return false;
-                }
-
-                if (!cur) {
-                    cur = (InnerNode *) Allocator().allocate(sizeof(InnerNode));
-                    new(cur) InnerNode(k, v);
-                }
-
-                InnerNode *next = node->next_.load(std::memory_order_relaxed);
-                cur->next_.store(next, std::memory_order_relaxed);
-                prev->store(cur, std::memory_order_release);
-                g.unlock();
-                node->retire([](InnerNode *n) {
-                    Allocator().deallocate((uint8_t *) n, sizeof(InnerNode));
-                });
-                return true;
-            }
-            prev = &node->next_;
-            node = node->next_.load(std::memory_order_relaxed);
-        }
-        if (type != InsertType::DOES_NOT_EXIST && type != InsertType::ANY) {
-            haz_node.reset();
-            haz_buckets.reset();
-            return false;
-        }
-        // Node not found
-        if (size_ >= load_factor_nodes_ && type == InsertType::ANY) {
-            Rehash(bucket_count << 1ull);
-            buckets_.load(std::memory_order_relaxed);
-            bucket_count <<= 1ull;
-            haz_buckets.reset(buckets);
-            idx = GetIdx(bucket_count, h);
-            assert(idx < bucket_count);
-            head = &buckets->root_[idx];
-            head_node = head->load(std::memory_order_relaxed);
-        }
-
-        size_++;
-        if (!cur) {
-            assert(type == InsertType::DOES_NOT_EXIST || type == InsertType::ANY);
-            cur = (InnerNode *) Allocator().allocate(sizeof(InnerNode));
-            new(cur) InnerNode(k, v);
-        }
-        cur->next_.store(head_node, std::memory_order_relaxed);
-        assert(head);
-        head->store(cur, std::memory_order_release);
-        it.Set(cur, buckets, bucket_count, idx);
-        return true;
-    }
-
-    void Rehash(size_t bucket_count) {
-        BucketsT *buckets = buckets_.load(std::memory_order_relaxed);
-        BucketsT *new_buckets = BucketsT::Create(bucket_count);
-
-        load_factor_nodes_ = bucket_count * load_factor_;
-
-        size_t old_count = bucket_count_.load(std::memory_order_relaxed);
-        for (size_t i = 0; i < old_count; i++) {
-            Atom<InnerNode *> *bucket = &buckets->root_[i];
-            InnerNode *node = bucket->load(std::memory_order_relaxed);
-            if (!node) {
-                continue;
-            }
-            size_t h = hasher_(node->GetValue().first);
-            size_t idx = GetIdx(bucket_count, h);
-
-            InnerNode *last_run = node;
-            size_t last_idx = idx;
-            size_t count = 0;
-            InnerNode *last = node->next_.load(std::memory_order_relaxed);
-            for (; last != nullptr;
-                   last = last->next_.load(std::memory_order_relaxed)) {
-                size_t k = GetIdx(bucket_count, HashFn()(last->GetValue().first));
-                if (k != last_idx) {
-                    last_idx = k;
-                    last_run = last;
-                    count = 0;
-                }
-                count++;
-            }
-            new_buckets->root_[last_idx].store(last_run, std::memory_order_relaxed);
-
-            for (; node != last_run;
-                   node = node->next_.load(std::memory_order_relaxed)) {
-                InnerNode *new_node = (InnerNode *) Allocator().allocate(sizeof(InnerNode));
-                new(new_node) InnerNode(*node);
-                size_t k = GetIdx(bucket_count, HashFn()(node->GetValue().first));
-                Atom<InnerNode *> *prev_head = &new_buckets->root_[k];
-                new_node->next_.store(prev_head->load(std::memory_order_relaxed));
-                prev_head->store(new_node, std::memory_order_relaxed);
-            }
-        }
-
-        BucketsT *old_buckets = buckets_.load(std::memory_order_relaxed);
-        seq_lock_.fetch_add(1, std::memory_order_release);
-        bucket_count_.store(bucket_count, std::memory_order_release);
-        buckets_.store(new_buckets, std::memory_order_release);
-        seq_lock_.fetch_add(1, std::memory_order_release);
-        old_buckets->retire([old_count](BucketsT *b) {
-            b->Destory(old_count);
-        });
-    }
-
-private:
-    Mutex mut_;
-    float load_factor_;
-    size_t load_factor_nodes_;
-    size_t size_{0};
-    const size_t max_size_;
-    std::function<size_t(const KeyType &)> hasher_;
-
-    alignas(64) Atom<BucketsT *> buckets_{nullptr};
-    Atom<uint64_t> seq_lock_{0};
-    Atom<size_t> bucket_count_;
-};
-
-} // namespace bucket
+//namespace bucket {
+//template<typename KeyType, typename ValueType>
+//struct Node {
+//    using KVPair = std::pair<KeyType, ValueType>;
+//    using Allocator = std::allocator<uint8_t>;
+//    template<typename T> using Atom = std::atomic<T>;
+//    using key_type = KeyType;
+//    using value_type = KVPair;
+//
+//    Node(const KeyType &k, const ValueType &v) : kv_pair_(k, v) {}
+//
+//    Node(const Node &node) : kv_pair_(node.kv_pair_) {}
+//
+//    const value_type &GetValue() const {
+//        return kv_pair_;
+//    }
+//
+//
+//    KVPair kv_pair_;
+//    Atom<Node *> next_{nullptr};
+//};
+//
+//template<typename KeyType, typename ValueType>
+//class alignas(128) Buckets {
+//    using Allocator = std::allocator<uint8_t>;
+//    template<typename T> using Atom = std::atomic<T>;
+//    using InnerNode = Node<KeyType, ValueType>;
+//    using BucketRoot = Atom<InnerNode *>;
+//public:
+//    static Buckets *Create(size_t count) {
+//        auto buf = Allocator().allocate(sizeof(Buckets) + sizeof(BucketRoot) * count);
+//        auto buckets = new(buf) Buckets();
+//        for (size_t j = 0; j < count; j++) {
+//            new(&buckets->root_[j]) BucketRoot;
+//            buckets->root_[j].store(nullptr);
+//        }
+//        return buckets;
+//    }
+//
+//    void Destory(size_t count) {
+//        for (size_t j = 0; j < count; j++) {
+//            root_[j].~BucketRoot();
+//        }
+//        this->~Buckets();
+//        Allocator().deallocate((uint8_t *) this, sizeof(BucketRoot) * count + sizeof(Buckets));
+//    }
+//
+//    ~Buckets() {
+//    }
+//
+//    BucketRoot root_[0];
+//};
+//
+//template<typename KeyType, typename ValueType, typename HashFn, typename KeyEqual>
+//class BucketMap : public ::TreeNode {
+//private:
+//    using Allocator = std::allocator<uint8_t>;
+//    using Mutex = std::mutex;
+//    using BucketsT = Buckets<KeyType, ValueType>;
+//    using InnerNode = Node<KeyType, ValueType>;
+//    template<typename T> using Atom = std::atomic<T>;
+//
+//public:
+//    using key_type = KeyType;
+//    using value_type = std::pair<KeyType, ValueType>;
+//
+//    struct Iterator {
+//        Iterator() = default;
+//
+//        explicit Iterator(std::nullptr_t) : hazptrs_(nullptr) {}
+//
+//        ~Iterator() = default;
+//
+//        void Set(InnerNode *node, BucketsT *buckets, size_t bucket_count, uint64_t idx) {
+//            node_ = node;
+//            buckets_ = buckets;
+//            bucket_count_ = bucket_count;
+//            idx_ = idx;
+//        }
+//
+//        const value_type &operator*() const {
+//            assert(node_);
+//            return node_->GetValue();
+//        }
+//
+//        const value_type *operator->() const {
+//            assert(node_);
+//            return &(node_->GetValue());
+//        }
+//
+//        const Iterator &operator++() {
+//            node_ = hazptrs_[2].get_protected(node_->next_);
+//            hazptrs_[1].swap(hazptrs_[2]);
+//            if (!node_) {
+//                ++idx_;
+//                Next();
+//            }
+//            return *this;
+//        }
+//
+//        void Next() {
+//            while (!node_) {
+//                if (idx_ >= bucket_count_) {
+//                    break;
+//                }
+//                assert(buckets_);
+//                node_ = hazptrs_[1].get_protected(buckets_->root_[idx_]());
+//                if (node_) {
+//                    break;
+//                }
+//                ++idx_;
+//            }
+//        }
+//
+//        bool operator==(const Iterator &o) const {
+//            return node_ == o.node_;
+//        }
+//
+//        bool operator!=(const Iterator &o) const {
+//            return !(*this == o);
+//        }
+//
+//        Iterator &operator=(const Iterator &o) = delete;
+//
+//        Iterator &operator=(Iterator &&o) noexcept {
+//            if (this != &o) {
+//                hazptrs_ = std::move(o.hazptrs_);
+//                node_ = std::exchange(o.node_, nullptr);
+//                buckets_ = std::exchange(o.buckets_, nullptr);
+//                bucket_count_ = std::exchange(o.bucket_count_, 0);
+//                idx_ = std::exchange(o.idx_, 0);
+//            }
+//            return *this;
+//        }
+//
+//        Iterator(const Iterator &o) = delete;
+//
+//        Iterator(Iterator &&o) noexcept
+//                : hazptrs_(std::move(o.hazptrs_)),
+//                  node_(std::exchange(o.node_, nullptr)),
+//                  buckets_(std::exchange(o.buckets_, nullptr)),
+//                  bucket_count_(std::exchange(o.bucket_count_, 0)),
+//                  idx_(std::exchange(o.idx_, 0)) {}
+//
+//        hazptr_array<3> hazptrs_;
+//        InnerNode *node_{nullptr};
+//        BucketsT *buckets_{nullptr};
+//        size_t bucket_count_{0};
+//        uint64_t idx_{0};
+//    };
+//
+//public:
+//    BucketMap(
+//            size_t initial_buckets,
+//            float load_factor,
+//            size_t max_size,
+//            std::function<size_t(const KeyType &)> hasher = HashFn())
+//            : load_factor_(load_factor), max_size_(max_size), hasher_(hasher) {
+//        initial_buckets = util::nextPowerOf2(initial_buckets);
+//        auto buckets = BucketsT::Create(initial_buckets);
+//        buckets_.store(buckets);
+//        bucket_count_.store(initial_buckets);
+//        load_factor_nodes_ = load_factor_ * initial_buckets;
+//    }
+//
+//    bool Find(Iterator &res, const KeyType &k) {
+//        hazptr_holder<> &haz_curr = res.hazptrs_[1];
+//        hazptr_holder<> &haz_next = res.hazptrs_[2];
+//        size_t h = hasher_(k);
+//        size_t bucket_count;
+//        BucketsT *buckets;
+//        GetBucketsPtrAndCount(buckets, bucket_count, res.hazptrs_[0]);
+//
+//        auto idx = GetIdx(bucket_count, h);
+//        const Atom<InnerNode *> *prev = &buckets->root_[idx];
+//        InnerNode *node = haz_curr.get_protected(*prev);
+//        while (node) {
+//            if (KeyEqual()(k, node->GetValue().first)) {
+//                res.Set(node, buckets, bucket_count, idx);
+//                return true;
+//            }
+//            node = haz_next.get_protected(node->next_);
+//            haz_curr.swap(haz_next);
+//        }
+//        return false;
+//    }
+//
+//    bool Insert(Iterator &it, const KeyType &k, const ValueType &v, InsertType type) {
+//        return DoInsert(it, k, v, type, nullptr);
+//    }
+//
+//    ::TreeNodeType Type() const override {
+//        return ::TreeNodeType::BUCKETS_NODE;
+//    }
+//
+//private:
+//    void GetBucketsPtrAndCount(BucketsT *&buckets, size_t &count, hazptr_holder<> &holder) {
+//        while (true) {
+//            auto seq_lock = seq_lock_.load(std::memory_order_acquire);
+//            count = bucket_count_.load(std::memory_order_acquire);
+//            buckets = holder.get_protected(buckets_);
+//            auto seq_lock2 = seq_lock_.load(std::memory_order_acquire);
+//            if (!(seq_lock & 1) && (seq_lock == seq_lock2)) {
+//                break;
+//            }
+//        }
+//    }
+//
+//    size_t GetIdx(size_t bucket_count, size_t hash) {
+//        return (hash & (bucket_count - 1));
+//    }
+//
+//    bool DoInsert(Iterator &it, const KeyType &k, const ValueType &v, InsertType type, InnerNode *cur) {
+//        size_t h = hasher_(k);
+//        std::unique_lock<Mutex> g(mut_);
+//
+//        size_t bucket_count = bucket_count_.load(std::memory_order_relaxed);
+//        auto buckets = buckets_.load(std::memory_order_relaxed);
+//        if (size_ >= load_factor_nodes_ && type == InsertType::DOES_NOT_EXIST) {
+//            Rehash(bucket_count << 1ull);
+//            buckets = buckets_.load(std::memory_order_relaxed);
+//            bucket_count = bucket_count_.load(std::memory_order_relaxed);
+//        }
+//
+//        size_t idx = GetIdx(bucket_count, h);
+//        assert(idx < bucket_count);
+//        Atom<InnerNode *> *head = &buckets->root_[idx];
+//        InnerNode *node = head->load(std::memory_order_relaxed);
+//        InnerNode *head_node = node;
+//        Atom<InnerNode *> *prev = head;
+//        auto &haz_buckets = it.hazptrs_[0];
+//        auto &haz_node = it.hazptrs_[1];
+//        haz_buckets.reset(buckets);
+//        while (node) {
+//            if (KeyEqual()(k, node->GetValue().first)) {
+//                // key found
+//                it.Set(node, buckets, bucket_count, idx);
+//                haz_node.reset(node);
+//                if (type == InsertType::DOES_NOT_EXIST) {
+//                    return false;
+//                }
+//
+//                if (!cur) {
+//                    cur = (InnerNode *) Allocator().allocate(sizeof(InnerNode));
+//                    new(cur) InnerNode(k, v);
+//                }
+//
+//                InnerNode *next = node->next_.load(std::memory_order_relaxed);
+//                cur->next_.store(next, std::memory_order_relaxed);
+//                prev->store(cur, std::memory_order_release);
+//                g.unlock();
+//                node->retire([](InnerNode *n) {
+//                    Allocator().deallocate((uint8_t *) n, sizeof(InnerNode));
+//                });
+//                return true;
+//            }
+//            prev = &node->next_;
+//            node = node->next_.load(std::memory_order_relaxed);
+//        }
+//        if (type != InsertType::DOES_NOT_EXIST && type != InsertType::ANY) {
+//            haz_node.reset();
+//            haz_buckets.reset();
+//            return false;
+//        }
+//        // Node not found
+//        if (size_ >= load_factor_nodes_ && type == InsertType::ANY) {
+//            Rehash(bucket_count << 1ull);
+//            buckets_.load(std::memory_order_relaxed);
+//            bucket_count <<= 1ull;
+//            haz_buckets.reset(buckets);
+//            idx = GetIdx(bucket_count, h);
+//            assert(idx < bucket_count);
+//            head = &buckets->root_[idx];
+//            head_node = head->load(std::memory_order_relaxed);
+//        }
+//
+//        size_++;
+//        if (!cur) {
+//            assert(type == InsertType::DOES_NOT_EXIST || type == InsertType::ANY);
+//            cur = (InnerNode *) Allocator().allocate(sizeof(InnerNode));
+//            new(cur) InnerNode(k, v);
+//        }
+//        cur->next_.store(head_node, std::memory_order_relaxed);
+//        assert(head);
+//        head->store(cur, std::memory_order_release);
+//        it.Set(cur, buckets, bucket_count, idx);
+//        return true;
+//    }
+//
+//    void Rehash(size_t bucket_count) {
+//        BucketsT *buckets = buckets_.load(std::memory_order_relaxed);
+//        BucketsT *new_buckets = BucketsT::Create(bucket_count);
+//
+//        load_factor_nodes_ = bucket_count * load_factor_;
+//
+//        size_t old_count = bucket_count_.load(std::memory_order_relaxed);
+//        for (size_t i = 0; i < old_count; i++) {
+//            Atom<InnerNode *> *bucket = &buckets->root_[i];
+//            InnerNode *node = bucket->load(std::memory_order_relaxed);
+//            if (!node) {
+//                continue;
+//            }
+//            size_t h = hasher_(node->GetValue().first);
+//            size_t idx = GetIdx(bucket_count, h);
+//
+//            InnerNode *last_run = node;
+//            size_t last_idx = idx;
+//            size_t count = 0;
+//            InnerNode *last = node->next_.load(std::memory_order_relaxed);
+//            for (; last != nullptr;
+//                   last = last->next_.load(std::memory_order_relaxed)) {
+//                size_t k = GetIdx(bucket_count, HashFn()(last->GetValue().first));
+//                if (k != last_idx) {
+//                    last_idx = k;
+//                    last_run = last;
+//                    count = 0;
+//                }
+//                count++;
+//            }
+//            new_buckets->root_[last_idx].store(last_run, std::memory_order_relaxed);
+//
+//            for (; node != last_run;
+//                   node = node->next_.load(std::memory_order_relaxed)) {
+//                InnerNode *new_node = (InnerNode *) Allocator().allocate(sizeof(InnerNode));
+//                new(new_node) InnerNode(*node);
+//                size_t k = GetIdx(bucket_count, HashFn()(node->GetValue().first));
+//                Atom<InnerNode *> *prev_head = &new_buckets->root_[k];
+//                new_node->next_.store(prev_head->load(std::memory_order_relaxed));
+//                prev_head->store(new_node, std::memory_order_relaxed);
+//            }
+//        }
+//
+//        BucketsT *old_buckets = buckets_.load(std::memory_order_relaxed);
+//        seq_lock_.fetch_add(1, std::memory_order_release);
+//        bucket_count_.store(bucket_count, std::memory_order_release);
+//        buckets_.store(new_buckets, std::memory_order_release);
+//        seq_lock_.fetch_add(1, std::memory_order_release);
+//        old_buckets->retire([old_count](BucketsT *b) {
+//            b->Destory(old_count);
+//        });
+//    }
+//
+//private:
+//    Mutex mut_;
+//    float load_factor_;
+//    size_t load_factor_nodes_;
+//    size_t size_{0};
+//    const size_t max_size_;
+//    std::function<size_t(const KeyType &)> hasher_;
+//
+//    alignas(64) Atom<BucketsT *> buckets_{nullptr};
+//    Atom<uint64_t> seq_lock_{0};
+//    Atom<size_t> bucket_count_;
+//};
+//
+//} // namespace bucket
 
 struct ThreadHashMapStat {
     GeneralLazySS<size_t> ss_{0.001};
     size_t total_{0};
+
+    size_t GetCount(size_t h) {
+        auto p = ss_.find(h);
+        if (p) {
+            return p->getCount();
+        }
+        return 0;
+    }
 };
 
 
@@ -517,7 +516,7 @@ template<typename KeyType, typename ValueType, typename HashFn, typename KeyEqua
 class ConcurrentHashMap {
     using Allocator = std::allocator<uint8_t>;
     using Mutex = std::mutex;
-    using BucketMapT = bucket::BucketMap<KeyType, ValueType, HashFn, KeyEqual>;
+//    using BucketMapT = bucket::BucketMap<KeyType, ValueType, HashFn, KeyEqual>;
     template<typename T> using Atom = std::atomic<T>;
     using DataNodeT = DataNode<KeyType, ValueType>;
 
@@ -527,10 +526,12 @@ class ConcurrentHashMap {
     static constexpr size_t kMaxDepth = 10;
     using ArrayNodeT = ArrayNode<kArrayNodeSize>;
 public:
-    ConcurrentHashMap(size_t root_size, size_t max_depth) :
+    ConcurrentHashMap(size_t root_size, size_t max_depth, size_t thread_cnt = 32) :
             ft_(65536), stat_(0) {
         root_size_ = util::nextPowerOf2(root_size);
         root_bits_ = util::powerOf2(root_size_);
+        thread_cnt = util::nextPowerOf2(thread_cnt);
+        HazPtrInit(thread_cnt, 2);
         size_t remain = kHashWordLength - root_bits_;
         max_depth_ = std::min({kMaxDepth, remain / kArrayNodeSizeBits, max_depth});
         size_t shift = root_bits_ + 10 * kArrayNodeSizeBits;
@@ -560,7 +561,7 @@ public:
         size_t tid = Thread::id();
         stat_[tid].ss_.put(h);
         stat_[tid].total_++;
-        if (stat_[tid].ss_.find(h)->getCount() > (stat_[tid].total_ >> 3ull)) {
+        if (stat_[tid].GetCount(h) > (stat_[tid].total_ >> 3ull)) {
             if (ft_.CheckedInsert(h, k, v)) {
                 return true;
             }
@@ -589,7 +590,7 @@ public:
         }
 
         {
-            hazptr_holder<> holder;
+            HazPtrHolder holder;
             auto node = ft_.PinnedFind(h, k, holder);
             if (node) {
                 v = node->Value();
@@ -598,7 +599,7 @@ public:
         }
 
         size_t n = 0;
-        hazptr_array<2> haz_arr;
+        std::array<HazPtrHolder, 2> haz_arr;
         size_t curr_holder_idx = 0;
 
         size_t idx = GetRootIdx(h);
@@ -606,11 +607,11 @@ public:
         TreeNode *node = nullptr;
         while (true) {
             curr_holder_idx = (curr_holder_idx + 1ull) & 1ull;
-            hazptr_holder<> &holder = haz_arr[curr_holder_idx];
-            hazptr_holder<> &next_holder = haz_arr[(curr_holder_idx + 1ull) & 1ull];
+            HazPtrHolder &holder = haz_arr[curr_holder_idx];
+            HazPtrHolder &next_holder = haz_arr[(curr_holder_idx + 1ull) & 1ull];
 
             if (n == 0) {
-                node = holder.get_protected(*node_ptr);
+                node = holder.Pin(*node_ptr);
             }
 
             if (!node) {
@@ -632,19 +633,21 @@ public:
                     n++;
                     idx = GetNthIdx(h, n);
                     node_ptr = &arr_node->array_[idx];
-                    node = next_holder.get_protected(*node_ptr);
-                    holder.reset(nullptr);
+                    node = next_holder.Pin(*node_ptr);
+                    holder.Reset();
                     continue;
                 }
                 case TreeNodeType::BUCKETS_NODE: {
-                    BucketMapT *bucket_map = static_cast<BucketMapT *>(node);
-                    typename BucketMapT::Iterator iter;
-                    if (bucket_map->Find(iter, k)) {
-                        v = iter->second;
-                        return true;
-                    } else {
-                        return false;
-                    }
+//                    BucketMapT *bucket_map = static_cast<BucketMapT *>(node);
+//                    typename BucketMapT::Iterator iter;
+//                    if (bucket_map->Find(iter, k)) {
+//                        v = iter->second;
+//                        return true;
+//                    } else {
+//                        return false;
+//                    }
+                    std::cerr << "Not supported yet" << std::endl;
+                    exit(1);
                 }
             }
         }
@@ -665,7 +668,7 @@ private:
     bool DoInsert(size_t h, const KeyType &k, std::unique_ptr<DataNodeT, std::function<void(DataNodeT *)>> &ptr,
                   InsertType type) {
         size_t n = 0;
-        hazptr_array<2> haz_arr;
+        std::array<HazPtrHolder, 2> haz_arr;
         size_t curr_holder_idx = 0;
 
         size_t idx = GetRootIdx(h);
@@ -673,10 +676,10 @@ private:
         TreeNode *node = nullptr;
         while (true) {
             curr_holder_idx = (curr_holder_idx + 1ull) & 1ull;
-            hazptr_holder<> &holder = haz_arr[curr_holder_idx];
-            hazptr_holder<> &next_holder = haz_arr[(curr_holder_idx + 1ull) & 1ull];
+            HazPtrHolder &holder = haz_arr[curr_holder_idx];
+            HazPtrHolder &next_holder = haz_arr[(curr_holder_idx + 1ull) & 1ull];
 
-            node = holder.get_protected(*node_ptr);
+            node = holder.Pin(*node_ptr);
 
             if (!node) {
                 if (type == InsertType::MUST_EXIST) {
@@ -686,7 +689,7 @@ private:
                 bool result = node_ptr->compare_exchange_strong(node, (TreeNode *) ptr.get(),
                                                                 std::memory_order_acq_rel);
                 if (!result) {
-                    holder.reset(nullptr);
+                    holder.Reset();
                     continue;
                 }
                 ptr.release();
@@ -701,11 +704,11 @@ private:
                         if (KeyEqual()(d_node->kv_pair_.first, k)) {
                             bool result = node_ptr->compare_exchange_strong(node, ptr.get(), std::memory_order_acq_rel);
                             if (!result) {
-                                holder.reset(nullptr);
+                                holder.Reset();
                                 continue;
                             }
                             ptr.release();
-                            d_node->retire();
+                            HazPtrRetire(d_node);
                             return true;
                         } else {
                             if (n < max_depth_ - 1) {
@@ -715,7 +718,7 @@ private:
                                 tmp_arr_ptr->array_[tmp_idx].store(node, std::memory_order_relaxed);
                                 bool result = node_ptr->compare_exchange_strong(node, (TreeNode *) tmp_arr_ptr.get(),
                                                                                 std::memory_order_acq_rel);
-                                holder.reset(nullptr);
+                                holder.Reset();
                                 if (result) {
                                     n++;
                                     size_t curr_idx = GetNthIdx(h, n);
@@ -744,7 +747,7 @@ private:
                     }
                     case TreeNodeType::ARRAY_NODE: {
                         n++;
-                        holder.reset(nullptr);
+                        holder.Reset();
                         ArrayNodeT *arr_node = static_cast<ArrayNodeT *>(node);
                         size_t curr_idx = GetNthIdx(h, n);
                         node_ptr = &arr_node->array_[curr_idx];
