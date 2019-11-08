@@ -509,6 +509,11 @@ struct ThreadHashMapStat {
         }
         return 0;
     }
+
+    void Record(size_t h) {
+        ss_.put(h);
+        total_++;
+    }
 };
 
 
@@ -527,7 +532,7 @@ class ConcurrentHashMap {
     using ArrayNodeT = ArrayNode<kArrayNodeSize>;
 public:
     ConcurrentHashMap(size_t root_size, size_t max_depth, size_t thread_cnt = 32) :
-            ft_(65536), stat_(0) {
+            ft_(16384), stat_(0) {
         root_size_ = util::nextPowerOf2(root_size);
         root_bits_ = util::powerOf2(root_size_);
         thread_cnt = util::nextPowerOf2(thread_cnt);
@@ -552,6 +557,9 @@ public:
 
 
     bool Insert(const KeyType &k, const ValueType &v, InsertType type = InsertType::ANY) {
+        thread_local size_t counter{0};
+        counter++;
+
         size_t h = HashFn()(k);
 
         if (ft_.TryUpdate(h, k, v)) {
@@ -559,9 +567,15 @@ public:
         }
 
         size_t tid = Thread::id();
-        stat_[tid].ss_.put(h);
-        stat_[tid].total_++;
-        if (stat_[tid].GetCount(h) > (stat_[tid].total_ >> 3ull)) {
+        ThreadHashMapStat &stat = stat_[tid];
+        stat.Record(h);
+        if (stat.total_ > ft_.Size() && (stat.GetCount(h) > (stat.total_ >> 5ull))) {
+            if (ft_.CheckedInsert(h, k, v)) {
+                return true;
+            }
+        }
+
+        if (stat.total_ > 10 * ft_.Size() && (counter & 0xfull) == 0) {
             if (ft_.CheckedInsert(h, k, v)) {
                 return true;
             }
@@ -585,8 +599,7 @@ public:
 
         if ((counter & (0x03ull)) == 0) {
             size_t tid = Thread::id();
-            stat_[tid].ss_.put(h);
-            stat_[tid].total_++;
+            stat_[tid].Record(h);
         }
 
         {
@@ -651,7 +664,6 @@ public:
                 }
             }
         }
-        return false;
     }
 
 private:

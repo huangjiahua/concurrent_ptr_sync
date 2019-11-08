@@ -110,6 +110,10 @@ public:
         return node;
     }
 
+    size_t Size() const {
+        return size_;
+    }
+
 private:
     inline size_t GetIdx(size_t hash) {
         return hash & (size_ - 1);

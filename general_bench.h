@@ -25,7 +25,7 @@ void Panic(const char *str) {
 
 // default configuration
 constexpr size_t kDefaultThreadCnt = 4;
-constexpr size_t kDefaultOperations = 1000000;
+constexpr size_t kDefaultOperations = 20000000;
 constexpr size_t kHashSize = 1024;
 constexpr double kDefaultReadRatio = 0.8;
 
