@@ -528,7 +528,7 @@ class ConcurrentHashMap {
     using ArrayNodeT = ArrayNode<kArrayNodeSize>;
 public:
     ConcurrentHashMap(size_t root_size, size_t max_depth) :
-            ft_(65536), stat_(64, ThreadHashMapStat()) {
+            ft_(65536), stat_(0) {
         root_size_ = util::nextPowerOf2(root_size);
         root_bits_ = util::powerOf2(root_size_);
         size_t remain = kHashWordLength - root_bits_;
@@ -542,6 +542,10 @@ public:
         for (size_t i = 0; i < root_size_; i++) {
             new(root_[i]) Atom<TreeNode *>;
             root_[i].store(nullptr);
+        }
+        stat_.reserve(64);
+        for (size_t i = 0; i < 64; i++) {
+            stat_.emplace_back();
         }
     }
 

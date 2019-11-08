@@ -91,7 +91,7 @@ int main(int argc, const char *argv[]) {
 
     ConcurrentHashMap<uint64_t, uint64_t, std::hash<uint64_t>, std::equal_to<>>
             map(config.initial_size, config.max_depth);
-    FastTable<uint64_t, uint64_t> ft(8192);
+    FastTable<uint64_t, uint64_t> ft(65536);
 
 
     for (size_t i = 0; i < config.operations; i++) {
