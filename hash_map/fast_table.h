@@ -29,7 +29,7 @@ public:
 };
 
 template<typename N>
-class  FastTableSlot {
+class alignas(128) FastTableSlot {
 public:
     template<typename T> using Atom = std::atomic<T>;
     Atom<N *> atom_ptr_;
@@ -40,7 +40,7 @@ public:
 };
 
 template<typename KeyType, typename ValueType>
-class alignas(128) FastTable {
+class FastTable {
 private:
     template<typename T> using Atom = std::atomic<T>;
     using Node = FastTableNode<KeyType, ValueType>;
