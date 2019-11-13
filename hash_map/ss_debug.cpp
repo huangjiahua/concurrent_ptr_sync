@@ -7,10 +7,7 @@
 #include "general_bench.h"
 
 int main() {
-    std::vector<GeneralLazySS<size_t>*> glss(64, nullptr);
-    for (auto &p : glss) {
-        p = new GeneralLazySS<size_t>(0.0001);
-    }
+    std::vector<GeneralLazySS<size_t>*> glss(64, new GeneralLazySS<size_t>(0.001));
     std::vector<std::thread> threads(8);
 
     size_t i = 0;

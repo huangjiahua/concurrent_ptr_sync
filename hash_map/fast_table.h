@@ -14,8 +14,13 @@ class FastTableNode {
 public:
     using KVPair = std::pair<K, V>;
     KVPair data_;
+    size_t hash_;
 
-    FastTableNode(const K &k, const V &v) : data_{k, v} {}
+    FastTableNode(size_t hash, const K &k, const V &v) : data_{k, v}, hash_{hash} {}
+
+    size_t Hash() const {
+        return hash_;
+    }
 
     const K &Key() const {
         return data_.first;
@@ -64,7 +69,7 @@ public:
     }
 
     void Insert(size_t hash, const KeyType &key, const ValueType &value) {
-        Node *node = new Node(key, value);
+        Node *node = new Node(hash, key, value);
         size_t idx = GetIdx(hash);
         Node *old = table_[idx].atom_ptr_.exchange(node);
         if (old) HazPtrRetire(old);
@@ -74,10 +79,10 @@ public:
         size_t idx = GetIdx(hash);
         HazPtrHolder holder;
         Node *old_node = holder.Pin(table_[idx].atom_ptr_);
-        if (old_node && old_node->Key() != key) {
+        if (old_node && (old_node->Hash() != hash || old_node->Key() != key)) {
             return false;
         }
-        Node *node = new Node(key, value);
+        Node *node = new Node(hash, key, value);
         bool res = table_[idx].atom_ptr_.compare_exchange_strong(old_node, node, std::memory_order_acq_rel);
         if (!res) {
             delete node;
@@ -89,8 +94,8 @@ public:
         size_t idx = GetIdx(hash);
         HazPtrHolder holder;
         Node *old_node = holder.Pin(table_[idx].atom_ptr_);
-        if (old_node && old_node->Key() == key) {
-            Node *node = new Node(key, value);
+        if (old_node && old_node->Hash() == hash && old_node->Key() == key) {
+            Node *node = new Node(hash, key, value);
             bool res = table_[idx].atom_ptr_.compare_exchange_strong(old_node, node, std::memory_order_acq_rel);
             if (!res) {
                 delete node;
