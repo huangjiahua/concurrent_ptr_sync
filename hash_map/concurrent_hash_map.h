@@ -532,7 +532,7 @@ class ConcurrentHashMap {
     using ArrayNodeT = ArrayNode<kArrayNodeSize>;
 public:
     ConcurrentHashMap(size_t root_size, size_t max_depth, size_t thread_cnt = 32) :
-            ft_(16384), stat_(0) {
+            ft_(65536), stat_(0) {
         root_size_ = util::nextPowerOf2(root_size);
         root_bits_ = util::powerOf2(root_size_);
         thread_cnt = util::nextPowerOf2(thread_cnt);
@@ -562,24 +562,29 @@ public:
 
         size_t h = HashFn()(k);
 
-        if (ft_.TryUpdate(h, k, v)) {
-            return true;
-        }
-
         size_t tid = Thread::id();
         ThreadHashMapStat &stat = stat_[tid];
         stat.Record(h);
-        if (stat.total_ > ft_.Size() && (stat.GetCount(h) > (stat.total_ >> 5ull))) {
-            if (ft_.CheckedInsert(h, k, v)) {
-                return true;
+
+        if (tid == 0 && stat.total_ == 1000000) {
+            auto p = stat.ss_.output();
+            for (size_t i = 0; i < 65536; i++) {
+                if (p[i].getItem() != std::numeric_limits<size_t>::max()) {
+                    std::array<HazPtrHolder, 2> haz_arr;
+                    Atom<TreeNode *> *locate = nullptr;
+                    auto elem = FindByHash(h, haz_arr, locate);
+                    if (elem) {
+                        bool r = ft_.CheckedInsert(h, elem->kv_pair_.first, elem->kv_pair_.second);
+                        if (r) {
+                            auto desired = (TreeNode *) elem;
+                            assert(locate);
+                            locate->compare_exchange_strong(desired, nullptr, std::memory_order_acq_rel);
+                        }
+                    }
+                }
             }
         }
 
-        if (stat.total_ > 10 * ft_.Size() && (counter & 0xfull) == 0) {
-            if (ft_.CheckedInsert(h, k, v)) {
-                return true;
-            }
-        }
 
         DataNodeT *new_node = (DataNodeT *) Allocator().allocate(sizeof(DataNodeT));
         new(new_node) DataNodeT(k, v);
@@ -593,6 +598,7 @@ public:
 
     bool Find(const KeyType &k, ValueType &v) {
         thread_local size_t counter{0};
+        thread_local size_t hit{0};
         counter++;
 
         size_t h = HashFn()(k);
@@ -606,6 +612,7 @@ public:
             HazPtrHolder holder;
             auto node = ft_.PinnedFind(h, k, holder);
             if (node) {
+                hit++;
                 v = node->Value();
                 return true;
             }
@@ -677,6 +684,49 @@ private:
         return (h & (kArrayNodeSize - 1));
     }
 
+    DataNodeT *FindByHash(size_t h, std::array<HazPtrHolder, 2> &haz_arr, Atom<TreeNode *> *&locate) {
+        size_t n = 0;
+        size_t curr_holder_idx = 0;
+
+        size_t idx = GetRootIdx(h);
+        Atom<TreeNode *> *node_ptr = &root_[idx];
+        TreeNode *node = nullptr;
+        while (true) {
+            curr_holder_idx = (curr_holder_idx + 1ull) & 1ull;
+            HazPtrHolder &holder = haz_arr[curr_holder_idx];
+            HazPtrHolder &next_holder = haz_arr[(curr_holder_idx + 1ull) & 1ull];
+
+            if (n == 0) {
+                node = holder.Pin(*node_ptr);
+            }
+
+            if (!node) {
+                return nullptr;
+            }
+
+            switch (node->Type()) {
+                case TreeNodeType::DATA_NODE: {
+                    DataNodeT *d_node = static_cast<DataNodeT *>(node);
+                    locate = node_ptr;
+                    return d_node;
+                }
+                case TreeNodeType::ARRAY_NODE: {
+                    ArrayNodeT *arr_node = static_cast<ArrayNodeT *>(node);
+                    n++;
+                    idx = GetNthIdx(h, n);
+                    node_ptr = &arr_node->array_[idx];
+                    node = next_holder.Pin(*node_ptr);
+                    holder.Reset();
+                    continue;
+                }
+                case TreeNodeType::BUCKETS_NODE: {
+                    std::cerr << "Not supported yet" << std::endl;
+                    exit(1);
+                }
+            }
+        }
+    }
+
     bool DoInsert(size_t h, const KeyType &k, std::unique_ptr<DataNodeT, std::function<void(DataNodeT *)>> &ptr,
                   InsertType type) {
         size_t n = 0;
@@ -739,19 +789,6 @@ private:
                                 }
                                 continue;
                             } else {
-//                                std::unique_ptr<BucketMapT> tmp_bkt_map(new BucketMapT(4, 1.0, 100000));
-//                                typename BucketMapT::Iterator iter;
-//                                tmp_bkt_map->Insert(iter, d_node->kv_pair_.first, d_node->kv_pair_.second,
-//                                                    InsertType::DOES_NOT_EXIST);
-//                                bool result = node_ptr->compare_exchange_strong(node, (TreeNode *) tmp_bkt_map.get(),
-//                                                                                std::memory_order_acq_rel);
-//                                holder.reset(nullptr);
-//                                if (result) {
-//                                    n++;
-//                                    tmp_bkt_map.release();
-//                                    d_node->retire();
-//                                }
-//                                continue;
                                 std::cerr << "Not Implemented Yet" << std::endl;
                                 exit(1);
                             }
@@ -766,11 +803,7 @@ private:
                         continue;
                     }
                     case TreeNodeType::BUCKETS_NODE: {
-//                        BucketMapT *bkt = static_cast<BucketMapT *>(node);
-//                        typename BucketMapT::Iterator iter;
-//                        bool result = bkt->Insert(iter, k, v, type);
-//                        ptr.release();
-//                        return result;
+
                         std::cerr << "Not Implemented Yet" << std::endl;
                         exit(1);
                     }

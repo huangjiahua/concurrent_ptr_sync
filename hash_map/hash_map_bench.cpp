@@ -7,16 +7,16 @@
 #include <fstream>
 
 constexpr static size_t kDefaultInitSize = 65536;
-constexpr static size_t kDefaultKeyRange = 10000000;
+constexpr static size_t kDefaultKeyRange = 10000000000ull;
 
 struct HMBConfig {
-    size_t thread_count = 2;
+    size_t thread_count = 4;
     size_t operations = kDefaultOperations;
     size_t initial_size = kDefaultInitSize;
     size_t key_range = kDefaultKeyRange;
-    double read_ratio = 0.9;
+    double read_ratio = 1.0;
     size_t max_depth = 20;
-    double zipf_factor = 1.5;
+    double zipf_factor = 0.99;
     bool only_tp = false;
 
     void LoadConfig(int argc, const char *argv[]) {
