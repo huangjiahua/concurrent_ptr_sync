@@ -85,7 +85,8 @@ int main(int argc, const char *argv[]) {
     size_t per_thread_task = config.operations / config.thread_count;
 
     ConcurrentHashMap<uint64_t, uint64_t, std::hash<uint64_t>, std::equal_to<>> map(config.initial_size,
-                                                                                    config.max_depth);
+                                                                                    config.max_depth,
+                                                                                    config.thread_count);
     for (size_t i = 0; i < config.operations; i++) {
         map.Insert(rng.GenZipf<uint64_t>(1000000000ull, config.zipf_factor), 0);
     }

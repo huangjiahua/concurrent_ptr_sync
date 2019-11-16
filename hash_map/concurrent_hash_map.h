@@ -15,6 +15,7 @@
 #include "hash_map/thread.h"
 #include "heavyhitter/GeneralLazySS.h"
 #include "my_haz_ptr/haz_ptr.h"
+#include "hash_map/pre_allocator.h"
 
 namespace util {
 size_t nextPowerOf2(size_t n) {

@@ -21,3 +21,5 @@ target_link_libraries(fast_table ${UTIL_LIB})
 
 add_executable(ss_debug ss_debug.cpp thread.cpp haz_ptr.cpp)
 target_link_libraries(ss_debug ${UTIL_LIB})
+
+add_executable(hit_ratio hit_ratio.cpp)
