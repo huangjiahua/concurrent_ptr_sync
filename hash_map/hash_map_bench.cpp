@@ -13,7 +13,7 @@ struct HMBConfig {
     size_t thread_count = 4;
     size_t operations = kDefaultOperations;
     size_t initial_size = kDefaultInitSize;
-    size_t key_range = kDefaultKeyRange;
+    size_t key_range = 1000000000ull;
     double read_ratio = 1.0;
     size_t max_depth = 20;
     double zipf_factor = 0.99;
@@ -88,11 +88,11 @@ int main(int argc, const char *argv[]) {
                                                                                     config.max_depth,
                                                                                     config.thread_count);
     for (size_t i = 0; i < config.operations; i++) {
-        map.Insert(rng.GenZipf<uint64_t>(1000000000ull, config.zipf_factor), 0);
+        map.Insert(rng.GenZipf<uint64_t>(config.key_range, config.zipf_factor), 0);
     }
 
     vector<uint64_t> keys(config.operations + 1000);
-    for (auto &key : keys) key = rng.GenZipf<uint64_t>(1000000000ull, config.zipf_factor);
+    for (auto &key : keys) key = rng.GenZipf<uint64_t>(config.key_range, config.zipf_factor);
     vector<int> coins(config.operations + 1000);
     for (auto &coin: coins) coin = rng.FlipCoin(config.read_ratio);
     vector<thread> threads(config.thread_count);

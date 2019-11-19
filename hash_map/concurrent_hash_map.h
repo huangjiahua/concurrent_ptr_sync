@@ -586,7 +586,6 @@ public:
             }
         }
 
-
         DataNodeT *new_node = (DataNodeT *) Allocator().allocate(sizeof(DataNodeT));
         new(new_node) DataNodeT(k, v);
         std::unique_ptr<DataNodeT, std::function<void(DataNodeT *)>> ptr(new_node, [](DataNodeT *n) {
@@ -604,11 +603,14 @@ public:
 
         size_t h = HashFn()(k);
 
+/*
         if ((counter & (0x0full)) == 0) {
             size_t tid = Thread::id();
             stat_[tid].Record(h);
         }
+*/
 
+/*
         {
             HazPtrHolder holder;
             auto node = ft_.PinnedFind(h, k, holder);
@@ -618,7 +620,7 @@ public:
                 return true;
             }
         }
-
+*/
         size_t n = 0;
         std::array<HazPtrHolder, 2> haz_arr;
         size_t curr_holder_idx = 0;
