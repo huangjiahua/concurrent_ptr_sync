@@ -41,20 +41,24 @@ public:
 
     int getDelta() { return delta; }
 
-    void setPrev(Item *counter) {
-        prev = counter;
-    }
+    void setPrev(Item *counter) { prev = counter; }
 
     Item *getPrev() { return prev; }
 
-    void setNext(Item *counter) {
-        next = counter;
-    }
+    void setNext(Item *counter) { next = counter; }
 
     Item *getNext() { return next; }
 
     static bool comp(Item<IT> &a, Item<IT> &b) {
         return a.getCount() > b.getCount();
+    }
+
+    static bool prec(Item<IT> &a, Item<IT> &b) {
+        return a.getItem() < b.getItem();
+    }
+
+    bool operator==(Item<IT> &target) const {
+        return item == target.getItem();
     }
 };
 
@@ -147,8 +151,8 @@ public:
     }
 
     ~GeneralLazySS() {
-//        delete[] hashtable;
-//        delete[] counters;
+        delete[] hashtable;
+        delete[] counters;
     }
 
     int range() {

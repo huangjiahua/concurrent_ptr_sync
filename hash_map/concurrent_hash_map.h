@@ -10,6 +10,7 @@
 #include <cassert>
 #include <iostream>
 #include <array>
+#include <unordered_set>
 
 #include "hash_map/fast_table.h"
 #include "hash_map/thread.h"
@@ -500,8 +501,10 @@ public:
 //} // namespace bucket
 
 struct ThreadHashMapStat {
-    GeneralLazySS<size_t> ss_{0.001};
-    size_t total_{0};
+    GeneralLazySS<size_t> ss_;
+    size_t total_;
+
+    ThreadHashMapStat(): ss_(0.00001), total_(0) {}
 
     size_t GetCount(size_t h) {
         auto p = ss_.find(h);
@@ -552,34 +555,36 @@ public:
         }
         stat_.reserve(64);
         for (size_t i = 0; i < 64; i++) {
-            stat_.emplace_back();
+            stat_.push_back(new ThreadHashMapStat);
         }
     }
 
 
     bool Insert(const KeyType &k, const ValueType &v, InsertType type = InsertType::ANY) {
-        thread_local size_t counter{0};
-        counter++;
-
         size_t h = HashFn()(k);
-
         size_t tid = Thread::id();
-        ThreadHashMapStat &stat = stat_[tid];
-        stat.Record(h);
+        ThreadHashMapStat *stat = stat_[tid];
+        if (stat->total_ < 5000000)
+            stat->Record(h);
 
-        if (tid == 0 && stat.total_ == 1000000) {
-            auto p = stat.ss_.output();
+        if (stat->total_ >= 5000000 && ft_.TryUpdate(h, k, v)) {
+            return true;
+        }
+
+        if (tid == 0 && stat->total_ == 5000000) {
+            stat->total_++;
+            Item<size_t> *p = stat->ss_.output(true);
+            size_t k = 0;
             for (size_t i = 0; i < 65536; i++) {
-                if (p[i].getItem() != std::numeric_limits<size_t>::max()) {
+                size_t hash = p[i].getItem();
+                if (hash != std::numeric_limits<size_t>::max()) {
                     std::array<HazPtrHolder, 2> haz_arr;
                     Atom<TreeNode *> *locate = nullptr;
-                    auto elem = FindByHash(h, haz_arr, locate);
+                    auto elem = FindByHash(hash, haz_arr, locate);
                     if (elem) {
-                        bool r = ft_.CheckedInsert(h, elem->kv_pair_.first, elem->kv_pair_.second);
+                        bool r = ft_.CheckedInsert(hash, elem->kv_pair_.first, elem->kv_pair_.second);
                         if (r) {
-                            auto desired = (TreeNode *) elem;
-                            assert(locate);
-                            locate->compare_exchange_strong(desired, nullptr, std::memory_order_acq_rel);
+                            k++;
                         }
                     }
                 }
@@ -593,7 +598,8 @@ public:
             Allocator().deallocate((uint8_t *) n, sizeof(DataNodeT));
         });
 
-        return DoInsert(h, k, ptr, type);
+        auto res = DoInsert(h, k, ptr, type);
+        return res;
     }
 
     bool Find(const KeyType &k, ValueType &v) {
@@ -603,14 +609,15 @@ public:
 
         size_t h = HashFn()(k);
 
-/*
         if ((counter & (0x0full)) == 0) {
             size_t tid = Thread::id();
-            stat_[tid].Record(h);
+            stat_[tid]->Record(h);
         }
-*/
 
-/*
+        if (counter == 40000000) {
+            std::cout << (double) hit / (double) counter << std::endl;
+        }
+
         {
             HazPtrHolder holder;
             auto node = ft_.PinnedFind(h, k, holder);
@@ -620,7 +627,7 @@ public:
                 return true;
             }
         }
-*/
+
         size_t n = 0;
         std::array<HazPtrHolder, 2> haz_arr;
         size_t curr_holder_idx = 0;
@@ -773,7 +780,7 @@ private:
                                 continue;
                             }
                             ptr.release();
-                            HazPtrRetire(d_node);
+                            // HazPtrRetire(d_node);
                             return true;
                         } else {
                             if (n < max_depth_ - 1) {
@@ -819,7 +826,7 @@ private:
     Atom<TreeNode *> *root_{nullptr};
     std::function<size_t(const KeyType &)> bucket_map_hasher_;
     FastTable<KeyType, ValueType> ft_;
-    std::vector<ThreadHashMapStat> stat_;
+    std::vector<ThreadHashMapStat*> stat_;
     size_t root_size_{0};
     size_t root_bits_{0};
     size_t max_depth_{0};

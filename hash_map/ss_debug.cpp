@@ -6,21 +6,17 @@
 #include "hash_map/thread.h"
 #include "general_bench.h"
 
-int main() {
-    std::vector<GeneralLazySS<size_t>*> glss(64, new GeneralLazySS<size_t>(0.001));
-    std::vector<std::thread> threads(8);
 
-    size_t i = 0;
-    for (auto &t : threads) {
-        t = std::thread([](size_t tid, std::vector<GeneralLazySS<size_t>*> &glss) {
-            RandomGenerator rng;
-            for (size_t k = 0; k < 1000000; k++) {
-                glss[tid]->put(rng.Gen<size_t>(0, 1000000000));
-            }
-        }, i++, std::ref(glss));
+int main() {
+    GeneralLazySS<size_t> ss(0.00001);
+    RandomGenerator rng;
+    for (size_t i = 0; i < 5000000; i++) {
+        ss.put(rng.GenZipf<size_t>(1000000000ull, 0.99));
     }
 
-    for (auto &t : threads) t.join();
-
+    auto p = ss.output(false);
+    for (size_t i = 0; i < 100; i++) {
+        std::cout << p[i].getItem() << std::endl;
+    }
 }
 
