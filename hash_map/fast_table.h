@@ -86,6 +86,8 @@ public:
         bool res = table_[idx].atom_ptr_.compare_exchange_strong(old_node, node, std::memory_order_acq_rel);
         if (!res) {
             delete node;
+        } else {
+            HazPtrRetire(old_node);
         }
         return res;
     }
@@ -99,6 +101,8 @@ public:
             bool res = table_[idx].atom_ptr_.compare_exchange_strong(old_node, node, std::memory_order_acq_rel);
             if (!res) {
                 delete node;
+            } else {
+                HazPtrRetire(old_node);
             }
             return res;
         }

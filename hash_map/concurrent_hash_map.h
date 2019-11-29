@@ -780,7 +780,7 @@ private:
                                 continue;
                             }
                             ptr.release();
-                            // HazPtrRetire(d_node);
+                            HazPtrRetire(d_node);
                             return true;
                         } else {
                             if (n < max_depth_ - 1) {
