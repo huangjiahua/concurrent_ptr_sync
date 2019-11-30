@@ -504,7 +504,7 @@ struct ThreadHashMapStat {
     GeneralLazySS<size_t> ss_;
     size_t total_;
 
-    ThreadHashMapStat(): ss_(0.00001), total_(0) {}
+    ThreadHashMapStat() : ss_(0.00001), total_(0) {}
 
     size_t GetCount(size_t h) {
         auto p = ss_.find(h);
@@ -535,8 +535,11 @@ class ConcurrentHashMap {
     static constexpr size_t kMaxDepth = 10;
     using ArrayNodeT = ArrayNode<kArrayNodeSize>;
 public:
-    ConcurrentHashMap(size_t root_size, size_t max_depth, size_t thread_cnt = 32) :
-            ft_(65536), stat_(0) {
+    ConcurrentHashMap(size_t root_size, size_t max_depth, size_t thread_cnt = 32)
+#ifndef DISABLE_FAST_TABLE
+    : ft_(65536), stat_(0)
+#endif
+    {
         root_size_ = util::nextPowerOf2(root_size);
         root_bits_ = util::powerOf2(root_size_);
         thread_cnt = util::nextPowerOf2(thread_cnt);
@@ -553,15 +556,18 @@ public:
             new(root_[i]) Atom<TreeNode *>;
             root_[i].store(nullptr);
         }
+#ifndef DISABLE_FAST_TABLE
         stat_.reserve(64);
         for (size_t i = 0; i < 64; i++) {
             stat_.push_back(new ThreadHashMapStat);
         }
+#endif
     }
 
 
     bool Insert(const KeyType &k, const ValueType &v, InsertType type = InsertType::ANY) {
         size_t h = HashFn()(k);
+#ifndef DISABLE_FAST_TABLE
         size_t tid = Thread::id();
         ThreadHashMapStat *stat = stat_[tid];
         if (stat->total_ < 5000000)
@@ -590,7 +596,7 @@ public:
                 }
             }
         }
-
+#endif
         DataNodeT *new_node = (DataNodeT *) Allocator().allocate(sizeof(DataNodeT));
         new(new_node) DataNodeT(k, v);
         std::unique_ptr<DataNodeT, std::function<void(DataNodeT *)>> ptr(new_node, [](DataNodeT *n) {
@@ -604,30 +610,25 @@ public:
 
     bool Find(const KeyType &k, ValueType &v) {
         thread_local size_t counter{0};
-        thread_local size_t hit{0};
         counter++;
 
         size_t h = HashFn()(k);
 
+#ifndef DISABLE_FAST_TABLE
         if ((counter & (0x0full)) == 0) {
             size_t tid = Thread::id();
             stat_[tid]->Record(h);
-        }
-
-        if (counter == 40000000) {
-            std::cout << (double) hit / (double) counter << std::endl;
         }
 
         {
             HazPtrHolder holder;
             auto node = ft_.PinnedFind(h, k, holder);
             if (node) {
-                hit++;
                 v = node->Value();
                 return true;
             }
         }
-
+#endif
         size_t n = 0;
         std::array<HazPtrHolder, 2> haz_arr;
         size_t curr_holder_idx = 0;
@@ -825,11 +826,12 @@ private:
 private:
     Atom<TreeNode *> *root_{nullptr};
     std::function<size_t(const KeyType &)> bucket_map_hasher_;
+#ifndef DISABLE_FAST_TABLE
     FastTable<KeyType, ValueType> ft_;
     std::vector<ThreadHashMapStat*> stat_;
+#endif
     size_t root_size_{0};
     size_t root_bits_{0};
     size_t max_depth_{0};
-    bool enable_fast_table_{true};
 };
 

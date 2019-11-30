@@ -10,6 +10,9 @@ target_link_libraries(conc_hash_map ${UTIL_LIB})
 
 add_executable(hash_map_bench hash_map_bench.cpp thread.cpp haz_ptr.cpp)
 target_link_libraries(hash_map_bench ${UTIL_LIB})
+if(${DISABLE_FAST_TABLE})
+    target_compile_definitions(hash_map_bench PUBLIC DISABLE_FAST_TABLE)
+endif()
 
 add_executable(ft_emulate fast_table_emulate.cpp thread.cpp haz_ptr.cpp)
 target_link_libraries(ft_emulate ${UTIL_LIB})
