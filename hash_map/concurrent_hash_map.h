@@ -721,9 +721,9 @@ private:
         size_t idx = GetRootIdx(h);
         Atom<TreeNode *> *node_ptr = &root_[idx];
         TreeNode *node = nullptr;
+        HazPtrHolder holder;
         while (true) {
-            HazPtrHolder holder;
-            node = holder.Pin(*node_ptr);
+            node = holder.Repin(*node_ptr);
 
             if (!node) {
                 if (type == InsertType::MUST_EXIST) {
