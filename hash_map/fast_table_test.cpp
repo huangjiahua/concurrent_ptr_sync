@@ -121,8 +121,7 @@ int main(int argc, const char *argv[]) {
                 uint64_t key = keys[j];
                 if (key < 60000) {
                     if (coins[j]) {
-                        HazPtrHolder h;
-                        auto p = ft.PinnedFind(key, key, h);
+                        auto p = ft.PinnedFind(key, key);
                         if (p) {
                             value = p->Value();
                         }

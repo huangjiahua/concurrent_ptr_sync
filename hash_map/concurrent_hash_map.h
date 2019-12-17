@@ -609,20 +609,11 @@ public:
     }
 
     bool Find(const KeyType &k, ValueType &v) {
-        thread_local size_t counter{0};
-        counter++;
-
         size_t h = HashFn()(k);
 
 #ifndef DISABLE_FAST_TABLE
-        // if ((counter & (0x0full)) == 0) {
-        //     size_t tid = Thread::id();
-        //     stat_[tid]->Record(h);
-        // }
-
         {
-            HazPtrHolder holder;
-            auto node = ft_.PinnedFind(h, k, holder);
+            auto node = ft_.PinnedFind(h, k);
             if (node) {
                 v = node->Value();
                 return true;

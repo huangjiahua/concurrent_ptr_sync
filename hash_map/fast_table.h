@@ -78,7 +78,7 @@ public:
     bool CheckedInsert(size_t hash, const KeyType &key, const ValueType &value) {
         size_t idx = GetIdx(hash);
         HazPtrHolder holder;
-        Node *old_node = holder.Pin(table_[idx].atom_ptr_);
+        Node *old_node = holder.Repin(table_[idx].atom_ptr_);
         if (old_node && (old_node->Hash() != hash || old_node->Key() != key)) {
             return false;
         }
@@ -95,7 +95,7 @@ public:
     bool TryUpdate(size_t hash, const KeyType &key, const ValueType &value) {
         size_t idx = GetIdx(hash);
         HazPtrHolder holder;
-        Node *old_node = holder.Pin(table_[idx].atom_ptr_);
+        Node *old_node = holder.Repin(table_[idx].atom_ptr_);
         if (old_node && old_node->Hash() == hash && old_node->Key() == key) {
             Node *node = new Node(hash, key, value);
             bool res = table_[idx].atom_ptr_.compare_exchange_strong(old_node, node, std::memory_order_acq_rel);
@@ -109,13 +109,11 @@ public:
         return false;
     }
 
-    Node *PinnedFind(size_t hash, const KeyType &key, HazPtrHolder &holder) {
+    Node *PinnedFind(size_t hash, const KeyType &key) {
+        HazPtrHolder holder;
         size_t idx = GetIdx(hash);
-        Node *node = holder.Pin(table_[idx].atom_ptr_);
+        Node *node = holder.Repin(table_[idx].atom_ptr_);
         if (!node || node->Key() != key) {
-            if (node) {
-                holder.Reset();
-            }
             return nullptr;
         }
         return node;

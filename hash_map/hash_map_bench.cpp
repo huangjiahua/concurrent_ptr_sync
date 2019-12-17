@@ -66,6 +66,13 @@ struct HMBConfig {
                 i++;
                 auto s = std::string(argv[i]);
                 zipf_factor = std::stod(s);
+            } else if (arg == "--rootsize") {
+                if (i + 1 > argc) {
+                    Panic("param error");
+                }
+                i++;
+                auto s = std::string(argv[i]);
+                initial_size = std::stoull(s);
             } else {
                 Panic("param error");
             }
