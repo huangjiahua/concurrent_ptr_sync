@@ -533,8 +533,8 @@ class ConcurrentHashMap {
     static constexpr size_t kArrayNodeSizeBits = 4;
     static constexpr size_t kHashWordLength = 64;
     static constexpr size_t kMaxDepth = 10;
-    static constexpr uintptr_t kHighestBit = 0x8000000000000000;
-    static constexpr uintptr_t kValidPtrField = 0x0000ffffffffffff;
+    static constexpr uintptr_t kHighestBit = 0x8000000000000000ull;
+    static constexpr uintptr_t kValidPtrField = 0x0000ffffffffffffull;
     using ArrayNodeT = ArrayNode<kArrayNodeSize>;
 public:
     ConcurrentHashMap(size_t root_size, size_t max_depth, size_t thread_cnt = 32)
