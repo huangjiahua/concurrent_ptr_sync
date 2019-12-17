@@ -533,17 +533,19 @@ class ConcurrentHashMap {
     static constexpr size_t kArrayNodeSizeBits = 4;
     static constexpr size_t kHashWordLength = 64;
     static constexpr size_t kMaxDepth = 10;
+    static constexpr uintptr_t kHighestBit = 0x8000000000000000;
+    static constexpr uintptr_t kValidPtrField = 0x0000ffffffffffff;
     using ArrayNodeT = ArrayNode<kArrayNodeSize>;
 public:
     ConcurrentHashMap(size_t root_size, size_t max_depth, size_t thread_cnt = 32)
 #ifndef DISABLE_FAST_TABLE
-    : ft_(65536), stat_(0)
+            : ft_(65536), stat_(0)
 #endif
     {
         root_size_ = util::nextPowerOf2(root_size);
         root_bits_ = util::powerOf2(root_size_);
         thread_cnt = util::nextPowerOf2(thread_cnt);
-        HazPtrInit(thread_cnt, 1);
+        HazPtrInit(thread_cnt, 2);
         size_t remain = kHashWordLength - root_bits_;
         max_depth_ = std::min({kMaxDepth, remain / kArrayNodeSizeBits, max_depth});
         size_t shift = root_bits_ + 10 * kArrayNodeSizeBits;
@@ -627,7 +629,7 @@ public:
         TreeNode *node = nullptr;
         HazPtrHolder holder;
         while (true) {
-            node = holder.Repin(*node_ptr);
+            node = holder.Repin(*node_ptr, IsArrayNode, FilterValidPtr);
 
             if (!node) {
                 return false;
@@ -669,6 +671,18 @@ private:
         return (h & (kArrayNodeSize - 1));
     }
 
+    static bool IsArrayNode(TreeNode *tnp) {
+        return ((uintptr_t) tnp) & kHighestBit;
+    }
+
+    static TreeNode *FilterValidPtr(TreeNode *tnp) {
+        return (TreeNode *) ((uintptr_t) tnp & kValidPtrField);
+    }
+
+    static TreeNode *MarkArrayNode(ArrayNodeT *anp) {
+        return (TreeNode *) (((uintptr_t) anp) | kHighestBit);
+    }
+
     DataNodeT *FindByHash(size_t h, HazPtrHolder &holder, Atom<TreeNode *> *&locate) {
         size_t n = 0;
         size_t curr_holder_idx = 0;
@@ -677,7 +691,7 @@ private:
         Atom<TreeNode *> *node_ptr = &root_[idx];
         TreeNode *node = nullptr;
         while (true) {
-            node = holder.Pin(*node_ptr);
+            node = holder.Pin(*node_ptr, IsArrayNode, FilterValidPtr);
 
             if (!node) {
                 return nullptr;
@@ -714,7 +728,7 @@ private:
         TreeNode *node = nullptr;
         HazPtrHolder holder;
         while (true) {
-            node = holder.Repin(*node_ptr);
+            node = holder.Repin(*node_ptr, IsArrayNode, FilterValidPtr);
 
             if (!node) {
                 if (type == InsertType::MUST_EXIST) {
@@ -749,7 +763,7 @@ private:
                             std::unique_ptr<ArrayNodeT> tmp_arr_ptr(new ArrayNodeT);
                             size_t tmp_hash = HashFn()(d_node->kv_pair_.first);
                             size_t tmp_idx = GetNthIdx(tmp_hash, n + 1);
-                            size_t next_idx = GetNthIdx(h, n+ 1);
+                            size_t next_idx = GetNthIdx(h, n + 1);
 
                             tmp_arr_ptr->array_[tmp_idx].store(node, std::memory_order_relaxed);
 
@@ -757,7 +771,7 @@ private:
                                 tmp_arr_ptr->array_[next_idx].store(ptr.get(), std::memory_order_relaxed);
                             }
 
-                            bool result = node_ptr->compare_exchange_strong(node, (TreeNode *) tmp_arr_ptr.get(),
+                            bool result = node_ptr->compare_exchange_strong(node, MarkArrayNode(tmp_arr_ptr.get()),
                                                                             std::memory_order_acq_rel);
 
                             if (next_idx != tmp_idx) {
@@ -801,7 +815,7 @@ private:
     std::function<size_t(const KeyType &)> bucket_map_hasher_;
 #ifndef DISABLE_FAST_TABLE
     FastTable<KeyType, ValueType> ft_;
-    std::vector<ThreadHashMapStat*> stat_;
+    std::vector<ThreadHashMapStat *> stat_;
 #endif
     size_t root_size_{0};
     size_t root_bits_{0};
